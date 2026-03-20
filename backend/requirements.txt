@@ -1,0 +1,21 @@
+# Backend dependencies
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+
+# Database
+sqlalchemy>=2.0
+pymysql>=1.1
+cryptography  # for pymysql SSL
+
+# Auth
+pyjwt>=2.8
+passlib[bcrypt]>=1.7
+pydantic[email]>=2.0
+bcrypt>=4.0,<4.1  # passlib incompatible with bcrypt 4.1+
+
+# STT
+openai-whisper>=20231117
+
+# HTTP client for Ollama/OpenAI
+httpx>=0.27
