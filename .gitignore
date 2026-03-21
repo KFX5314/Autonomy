@@ -23,6 +23,9 @@ desktop.ini
 Thumbs.db
 .DS_Store
 
+# Research / personal notes
+deep-research-report.md
+
 # Logs
 *.log
 
