@@ -1,5 +1,5 @@
 """
-Audio processing route — receives audio chunks from patient app,
+Audio processing route - receives audio chunks from patient app,
 runs STT + episode detection, returns result.
 """
 
@@ -19,7 +19,11 @@ from ..schemas.alert import AudioChunkResponse
 from ..auth import require_patient
 from ..services.stt_service import transcribe_audio
 from ..services.episode_detector import EpisodeDetector
+from ..services.speaker_id_service import identify_speaker
 from ..config import config
+
+import logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/audio", tags=["audio"])
 
@@ -57,10 +61,24 @@ async def process_audio_chunk(
         transcript_text = stt_result["text"]
 
         if not transcript_text.strip():
+            print("\033[90m  ... silencio / audio vacío\033[0m")
             return AudioChunkResponse(
                 transcript="", episode=False, severity=0,
                 reason="Silencio o audio no reconocido",
             )
+
+        # --- Debug: show transcription ---
+        print(f"\n\033[96m{'═'*60}\033[0m")
+        print(f"\033[96m  📝 TEXTO DETECTADO:\033[0m {transcript_text}")
+
+        # 1b. Speaker identification (if voice sample enrolled)
+        speaker_tag = ""
+        if patient.voice_embedding:
+            is_patient = identify_speaker(tmp_path, patient.voice_embedding)
+            speaker_tag = "[PACIENTE]" if is_patient else "[DESCONOCIDO]"
+            transcript_text = f"{speaker_tag} {transcript_text}"
+        else:
+            print("\033[93m  ⚠  Sin muestra de voz — no se identifica hablante\033[0m")
 
         # 2. Store transcript
         transcript = Transcript(
@@ -96,6 +114,16 @@ async def process_audio_chunk(
             alert_id = alert.id
 
         db.commit()
+
+        # --- Debug: show result ---
+        if result.is_episode:
+            print(f"\033[91m  🚨 ALERTA: SÍ  (severidad {result.severity})\033[0m")
+            print(f"\033[91m     Razón: {result.reason}\033[0m")
+            if result.llm_response:
+                print(f"\033[93m     Respuesta: {result.llm_response[:120]}\033[0m")
+        else:
+            print(f"\033[92m  ✅ ALERTA: NO\033[0m")
+        print(f"\033[96m{'═'*60}\033[0m\n")
 
         return AudioChunkResponse(
             transcript=transcript_text,

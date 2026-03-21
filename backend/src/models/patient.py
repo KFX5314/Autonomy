@@ -10,6 +10,7 @@ class Patient(Base):
     user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, unique=True)
     birth_date = Column(Date, nullable=True)
     notes = Column(Text, nullable=True)
+    voice_embedding = Column(JSON, nullable=True)  # 256-float list from Resemblyzer
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
 
     user = relationship("User", back_populates="patient_profile")

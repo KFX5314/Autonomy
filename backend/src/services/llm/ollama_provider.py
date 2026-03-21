@@ -1,5 +1,5 @@
 """
-Ollama provider — calls the local Ollama HTTP API.
+Ollama provider - calls the local Ollama HTTP API.
 """
 
 import httpx

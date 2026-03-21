@@ -2,7 +2,10 @@
 Patient management routes — used by caregivers.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+import os
+import tempfile
+
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -10,6 +13,7 @@ from ..models.user import User
 from ..models.patient import Patient, PatientContext
 from ..schemas.patient import PatientOut, PatientContextUpdate, PatientContextOut
 from ..auth import require_caregiver
+from ..services.speaker_id_service import create_embedding
 
 router = APIRouter(prefix="/patients", tags=["patients"])
 
@@ -80,3 +84,34 @@ def update_context(
     db.commit()
     db.refresh(ctx)
     return ctx
+
+
+@router.post("/{patient_id}/voice-sample")
+def upload_voice_sample(
+    patient_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_caregiver),
+):
+    """Upload a voice sample (.wav) to enroll the patient's voice."""
+    patient = db.query(Patient).filter(Patient.id == patient_id).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    patient_user = db.query(User).filter(User.id == patient.user_id).first()
+    if not patient_user or patient_user.caregiver_id != user.id:
+        raise HTTPException(status_code=403, detail="Not your patient")
+
+    # Save to temp file, generate embedding, clean up
+    suffix = os.path.splitext(file.filename or "sample.wav")[1] or ".wav"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(file.file.read())
+        tmp_path = tmp.name
+
+    try:
+        embedding = create_embedding(tmp_path)
+        patient.voice_embedding = embedding
+        db.commit()
+        return {"status": "ok", "message": "Voice sample enrolled", "embedding_size": len(embedding)}
+    finally:
+        os.unlink(tmp_path)
