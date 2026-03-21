@@ -204,7 +204,7 @@ Documentación interactiva completa en `/docs` (Swagger UI) cuando el backend es
 - Facilita testing: se podría crear un `MockProvider` para pruebas unitarias.
 
 ### ¿Por qué detección en dos fases (reglas + LLM)?
-- Las reglas regex son instantáneas y deterministas — responden rápido ante frases conocidas.
+- Las reglas regex son instantáneas y deterministas - responden rápido ante frases conocidas.
 - El LLM aporta comprensión contextual para frases no previstas.
 - Si el LLM falla o tarda, las reglas siguen funcionando como fallback.
 

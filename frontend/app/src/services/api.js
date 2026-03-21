@@ -1,5 +1,5 @@
 /**
- * API service — single source of truth for backend communication.
+ * API service - single source of truth for backend communication.
  */
 
 // Set this to your backend URL (Tailscale IP or local)
@@ -106,11 +106,36 @@ export async function sendAudioChunk(uri) {
   if (_token) {
     headers["Authorization"] = `Bearer ${_token}`;
   }
-
+  // Do NOT set Content-Type manually — fetch auto-generates the boundary for FormData
   const res = await fetch(`${BASE_URL}/audio/chunk`, {
     method: "POST",
     body: form,
-    headers: { ...headers, "Content-Type": "multipart/form-data" },
+    headers,
+  });
+
+  const text = await res.text();
+  if (!res.ok) throw new Error(text);
+  return JSON.parse(text);
+}
+
+// ─── Voice enrollment (caregiver) ────────────────────
+export async function uploadVoiceSample(patientId, uri) {
+  const form = new FormData();
+  form.append("file", {
+    uri,
+    name: "voice-sample.m4a",
+    type: "audio/mp4",
+  });
+
+  const headers = {};
+  if (_token) {
+    headers["Authorization"] = `Bearer ${_token}`;
+  }
+
+  const res = await fetch(`${BASE_URL}/patients/${patientId}/voice-sample`, {
+    method: "POST",
+    body: form,
+    headers,
   });
 
   const text = await res.text();

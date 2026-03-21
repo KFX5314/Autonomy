@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .database import engine, Base
 from .routes import auth_router, patients_router, audio_router, alerts_router
 from .services.llm import get_llm_provider
+from .services.llm.ollama_provider import OllamaProvider
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -24,6 +25,24 @@ async def lifespan(app: FastAPI):
     # Startup: create tables if they don't exist (dev convenience)
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables verified/created.")
+
+    # Pre-load all heavy models so first request is fast
+    logger.info("Warming up models...")
+
+    # 1. Whisper STT
+    from .services.stt_service import warmup as warmup_stt
+    warmup_stt()
+
+    # 2. Resemblyzer speaker encoder
+    from .services.speaker_id_service import warmup as warmup_speaker
+    warmup_speaker()
+
+    # 3. Ollama: verify model is available (won't auto-download)
+    llm = get_llm_provider()
+    if isinstance(llm, OllamaProvider):
+        await llm.check_model()
+
+    logger.info("All models ready. Server accepting requests.")
     yield
     # Shutdown
     logger.info("Shutting down.")

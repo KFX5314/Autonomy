@@ -22,7 +22,7 @@ class Config:
     JWT_EXPIRE_MINUTES: int = field(default_factory=lambda: int(os.getenv("JWT_EXPIRE_MINUTES", "1440")))
 
     # STT
-    STT_MODEL: str = field(default_factory=lambda: os.getenv("STT_MODEL", "base"))
+    STT_MODEL: str = field(default_factory=lambda: os.getenv("STT_MODEL", "medium"))
     STT_DEVICE: str = field(default_factory=lambda: os.getenv("STT_DEVICE", "cuda"))
 
     # LLM Provider: "ollama" | "openai"

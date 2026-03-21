@@ -63,8 +63,8 @@ def acknowledge_alert(
     if patient_user.caregiver_id != user.id:
         raise HTTPException(status_code=403, detail="Not your patient's alert")
 
-    if body.status.upper() not in ("ACK", "CLOSED"):
-        raise HTTPException(status_code=400, detail="Status must be ACK or CLOSED")
+    if body.status.upper() != "ACK":
+        raise HTTPException(status_code=400, detail="Status must be ACK")
 
     alert.status = body.status.upper()
     db.commit()

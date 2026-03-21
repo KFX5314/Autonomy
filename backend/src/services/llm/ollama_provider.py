@@ -34,3 +34,38 @@ class OllamaProvider(LLMProvider):
                 return resp.status_code == 200
         except Exception:
             return False
+
+    async def check_model(self) -> None:
+        """Verify the Ollama model is available. Raise if missing."""
+        import logging
+        log = logging.getLogger(__name__)
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{self.base_url}/api/tags")
+                resp.raise_for_status()
+                models = [m["name"] for m in resp.json().get("models", [])]
+                if any(self.model in m or m.startswith(self.model.split(":")[0]) for m in models):
+                    log.info(f"Ollama model '{self.model}' ✓")
+                    return
+            log.error(
+                f"\n{'='*60}\n"
+                f"  Ollama model '{self.model}' NOT FOUND.\n"
+                f"  Run this command first:\n\n"
+                f"    ollama pull {self.model}\n\n"
+                f"  Then restart the server.\n"
+                f"{'='*60}"
+            )
+            raise SystemExit(1)
+        except SystemExit:
+            raise
+        except httpx.ConnectError:
+            log.error(
+                f"\n{'='*60}\n"
+                f"  Cannot connect to Ollama at {self.base_url}.\n"
+                f"  Make sure Ollama is running:\n\n"
+                f"    ollama serve\n\n"
+                f"{'='*60}"
+            )
+            raise SystemExit(1)
+        except Exception as e:
+            log.warning(f"Could not verify Ollama model: {e}")

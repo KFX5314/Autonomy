@@ -5,6 +5,7 @@ runs STT + episode detection, returns result.
 
 import tempfile
 import os
+import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
@@ -19,7 +20,7 @@ from ..schemas.alert import AudioChunkResponse
 from ..auth import require_patient
 from ..services.stt_service import transcribe_audio
 from ..services.episode_detector import EpisodeDetector
-from ..services.speaker_id_service import identify_speaker
+from ..services.speaker_id_service import diarize_segments, build_tagged_transcript
 from ..config import config
 
 import logging
@@ -55,10 +56,19 @@ async def process_audio_chunk(
         tmp_path = tmp.name
 
     try:
-        # 1. Transcribe
+        t0 = time.time()
+        print(f"\n\033[96m{'═'*60}\033[0m")
+        print(f"\033[96m  ⏱  AUDIO RECIBIDO {datetime.now().strftime('%H:%M:%S.%f')[:-3]}\033[0m")
+
+        # 1. Transcribe (with segment timestamps)
         now = datetime.now(timezone.utc)
+        t_stt_start = time.time()
         stt_result = transcribe_audio(tmp_path)
+        t_stt_end = time.time()
         transcript_text = stt_result["text"]
+        segments = stt_result.get("segments", [])
+
+        print(f"\033[96m  ⏱  WHISPER ({config.STT_MODEL}): {t_stt_end - t_stt_start:.2f}s\033[0m")
 
         if not transcript_text.strip():
             print("\033[90m  ... silencio / audio vacío\033[0m")
@@ -67,18 +77,23 @@ async def process_audio_chunk(
                 reason="Silencio o audio no reconocido",
             )
 
-        # --- Debug: show transcription ---
-        print(f"\n\033[96m{'═'*60}\033[0m")
         print(f"\033[96m  📝 TEXTO DETECTADO:\033[0m {transcript_text}")
 
-        # 1b. Speaker identification (if voice sample enrolled)
-        speaker_tag = ""
-        if patient.voice_embedding:
-            is_patient = identify_speaker(tmp_path, patient.voice_embedding)
-            speaker_tag = "[PACIENTE]" if is_patient else "[DESCONOCIDO]"
-            transcript_text = f"{speaker_tag} {transcript_text}"
+        # 1b. Per-segment speaker diarization (if voice sample enrolled)
+        t_diar_start = time.time()
+        if patient.voice_embedding and segments:
+            segments = diarize_segments(
+                tmp_path, segments, patient.voice_embedding
+            )
+            transcript_text = build_tagged_transcript(segments)
+            print(f"\033[96m  📋 TRANSCRIPCIÓN ETIQUETADA:\033[0m")
+            for line in transcript_text.split("\n"):
+                print(f"     {line}")
         else:
-            print("\033[93m  ⚠  Sin muestra de voz - no se identifica hablante\033[0m")
+            if not patient.voice_embedding:
+                print("\033[93m  ⚠  Sin muestra de voz - no se identifica hablante\033[0m")
+        t_diar_end = time.time()
+        print(f"\033[96m  ⏱  DIARIZACIÓN:    {t_diar_end - t_diar_start:.2f}s\033[0m")
 
         # 2. Store transcript
         transcript = Transcript(
@@ -97,7 +112,10 @@ async def process_audio_chunk(
         context_data = ctx.context_json if ctx else {}
 
         detector = EpisodeDetector(context_data)
+        t_llm_start = time.time()
         result = await detector.analyze(transcript_text)
+        t_llm_end = time.time()
+        print(f"\033[96m  ⏱  LLM ({config.LLM_MODEL}): {t_llm_end - t_llm_start:.2f}s\033[0m")
 
         alert_id = None
         if result.is_episode:
@@ -123,6 +141,7 @@ async def process_audio_chunk(
                 print(f"\033[93m     Respuesta: {result.llm_response[:120]}\033[0m")
         else:
             print(f"\033[92m  ✅ ALERTA: NO\033[0m")
+        print(f"\033[96m  ⏱  TOTAL:          {time.time() - t0:.2f}s\033[0m")
         print(f"\033[96m{'═'*60}\033[0m\n")
 
         return AudioChunkResponse(

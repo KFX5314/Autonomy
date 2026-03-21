@@ -1,5 +1,5 @@
 /**
- * TFG-DEMENCIA — Unified app with role-based login.
+ * TFG-DEMENCIA - Unified app with role-based login.
  * Caregivers see patient management + alerts.
  * Patients see the listening interface.
  */

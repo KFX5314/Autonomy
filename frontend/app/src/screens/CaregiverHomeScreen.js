@@ -1,5 +1,5 @@
 /**
- * Caregiver Home — patient list, alerts overview.
+ * Caregiver Home - patient list, alerts overview.
  */
 import React, { useState, useCallback } from "react";
 import {
@@ -18,6 +18,7 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext }) {
   const [alerts, setAlerts] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -52,6 +53,9 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext }) {
     return p ? p.full_name : `Paciente #${patientId}`;
   };
 
+  const newAlerts = alerts.filter((a) => a.status === "NEW");
+  const pastAlerts = alerts.filter((a) => a.status !== "NEW");
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -84,43 +88,82 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext }) {
         />
       )}
 
-      {/* Alerts section */}
-      <Text style={styles.sectionTitle}>
-        Alertas {alerts.filter((a) => a.status === "NEW").length > 0 &&
-          `(${alerts.filter((a) => a.status === "NEW").length} nuevas)`}
-      </Text>
-      <FlatList
-        data={alerts}
-        keyExtractor={(item) => String(item.id)}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}
-        style={styles.alertList}
-        ListEmptyComponent={
-          loaded ? <Text style={styles.empty}>Sin alertas.</Text> : null
-        }
-        renderItem={({ item }) => (
-          <View style={[styles.alertCard, item.status === "NEW" && styles.alertNew]}>
-            <View style={styles.alertHeader}>
-              <Text style={styles.alertPatient}>{patientName(item.patient_id)}</Text>
-              <Text style={styles.alertSeverity}>Sev: {item.severity}/5</Text>
-            </View>
-            <Text style={styles.alertReason}>{item.reason}</Text>
-            {item.llm_response && (
-              <Text style={styles.alertLlm}>Respuesta IA: {item.llm_response}</Text>
-            )}
-            <View style={styles.alertFooter}>
-              <Text style={styles.alertTime}>
-                {new Date(item.created_at).toLocaleString("es-ES")}
-              </Text>
-              {item.status === "NEW" && (
-                <Pressable style={styles.ackBtn} onPress={() => handleAck(item.id)}>
-                  <Text style={styles.ackText}>✓ Aceptar</Text>
-                </Pressable>
-              )}
-              <Text style={styles.alertStatus}>{item.status}</Text>
-            </View>
+      {showHistory ? (
+        <>
+          <View style={styles.sectionRow}>
+            <Text style={styles.sectionTitle}>Historial de alertas</Text>
+            <Pressable style={styles.historyBtn} onPress={() => setShowHistory(false)}>
+              <Text style={styles.historyIcon}>🔔</Text>
+              <Text style={styles.historyLabel}>Alertas</Text>
+            </Pressable>
           </View>
-        )}
-      />
+          <FlatList
+            data={pastAlerts}
+            keyExtractor={(item) => String(item.id)}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}
+            style={styles.alertList}
+            ListEmptyComponent={
+              loaded ? <Text style={styles.empty}>Sin alertas pasadas.</Text> : null
+            }
+            renderItem={({ item }) => (
+              <View style={styles.alertCard}>
+                <View style={styles.alertHeader}>
+                  <Text style={styles.alertPatient}>{patientName(item.patient_id)}</Text>
+                  <Text style={styles.alertSeverity}>Sev: {item.severity}/5</Text>
+                </View>
+                <Text style={styles.alertReason}>{item.reason}</Text>
+                {item.llm_response && (
+                  <Text style={styles.alertLlm}>Respuesta IA: {item.llm_response}</Text>
+                )}
+                <Text style={styles.alertTime}>
+                  {new Date(item.created_at).toLocaleString("es-ES")}
+                </Text>
+              </View>
+            )}
+          />
+        </>
+      ) : (
+        <>
+          <View style={styles.sectionRow}>
+            <Text style={styles.sectionTitle}>
+              Alertas {newAlerts.length > 0 && `(${newAlerts.length} nuevas)`}
+            </Text>
+            <Pressable style={styles.historyBtn} onPress={() => setShowHistory(true)}>
+              <Text style={styles.historyIcon}>🕓</Text>
+              <Text style={styles.historyLabel}>Historial</Text>
+            </Pressable>
+          </View>
+          <FlatList
+            data={newAlerts}
+            keyExtractor={(item) => String(item.id)}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}
+            style={styles.alertList}
+            ListEmptyComponent={
+              loaded ? <Text style={styles.empty}>Sin alertas nuevas.</Text> : null
+            }
+            renderItem={({ item }) => (
+              <View style={[styles.alertCard, styles.alertNew]}>
+                <View style={styles.alertHeader}>
+                  <Text style={styles.alertPatient}>{patientName(item.patient_id)}</Text>
+                  <Text style={styles.alertSeverity}>Sev: {item.severity}/5</Text>
+                </View>
+                <Text style={styles.alertReason}>{item.reason}</Text>
+                {item.llm_response && (
+                  <Text style={styles.alertLlm}>Respuesta IA: {item.llm_response}</Text>
+                )}
+                <View style={styles.alertFooter}>
+                  <Text style={styles.alertTime}>
+                    {new Date(item.created_at).toLocaleString("es-ES")}
+                  </Text>
+                  <Pressable style={styles.ackBtn} onPress={() => handleAck(item.id)}>
+                    <Text style={styles.ackText}>✓ Aceptar</Text>
+                  </Pressable>
+                </View>
+              </View>
+            )}
+          />
+        </>
+      )}
     </View>
   );
 }
@@ -136,7 +179,11 @@ const styles = StyleSheet.create({
   },
   greeting: { fontSize: 22, fontWeight: "700" },
   logout: { color: "#E74C3C", fontSize: 16 },
-  sectionTitle: { fontSize: 18, fontWeight: "700", marginTop: 16, marginBottom: 10 },
+  historyBtn: { flexDirection: "row", alignItems: "center", gap: 4 },
+  historyIcon: { fontSize: 18 },
+  historyLabel: { color: "#4A90D9", fontSize: 14, fontWeight: "600" },
+  sectionRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 16, marginBottom: 10 },
+  sectionTitle: { fontSize: 18, fontWeight: "700" },
   empty: { color: "#999", marginBottom: 10 },
   patientList: { marginBottom: 8, maxHeight: 100 },
   patientCard: {
@@ -167,7 +214,6 @@ const styles = StyleSheet.create({
   alertLlm: { fontSize: 13, color: "#555", fontStyle: "italic", marginBottom: 6 },
   alertFooter: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   alertTime: { fontSize: 12, color: "#999" },
-  alertStatus: { fontSize: 12, color: "#999", fontWeight: "600" },
   ackBtn: {
     backgroundColor: "#27AE60",
     borderRadius: 8,

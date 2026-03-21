@@ -12,7 +12,7 @@ class Alert(Base):
     severity = Column(SmallInteger, nullable=False)
     reason = Column(String(512), nullable=False)
     llm_response = Column(Text, nullable=True)
-    status = Column(Enum("NEW", "ACK", "CLOSED", name="alert_status"), default="NEW")
+    status = Column(Enum("NEW", "ACK", name="alert_status"), default="NEW")
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
 
     patient = relationship("Patient", back_populates="alerts")

@@ -1,7 +1,7 @@
 /**
- * Edit patient context — caregiver edits trigger phrases, risk rules, profile.
+ * Edit patient context - caregiver edits trigger phrases, risk rules, profile.
  */
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   View,
   Text,
@@ -10,8 +10,10 @@ import {
   ScrollView,
   StyleSheet,
   Alert,
+  Animated,
 } from "react-native";
-import { getPatientContext, updatePatientContext } from "../services/api";
+import { Audio } from "expo-av";
+import { getPatientContext, updatePatientContext, uploadVoiceSample } from "../services/api";
 
 export default function PatientContextScreen({ patient, onBack }) {
   const [context, setContext] = useState(null);
@@ -24,9 +26,25 @@ export default function PatientContextScreen({ patient, onBack }) {
   const [medicalNotes, setMedicalNotes] = useState("");
   const [triggerPhrases, setTriggerPhrases] = useState("");
   const [riskRules, setRiskRules] = useState("");
+  const [recording, setRecording] = useState(null);
+  const [voiceStatus, setVoiceStatus] = useState(null); // null | "recording" | "uploading" | "done"
+  const [voiceProgress, setVoiceProgress] = useState(0); // 0-1
+  const progressAnim = useRef(new Animated.Value(0)).current;
+  const timerRef = useRef(null);
+  const recordingRef = useRef(null);
+
+  const VOICE_DURATION_MS = 10000; // 10 seconds
+  const TICK_MS = 100;
 
   useEffect(() => {
     loadContext();
+  }, []);
+
+  // Clean up timer on unmount
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
   }, []);
 
   const loadContext = async () => {
@@ -53,6 +71,83 @@ export default function PatientContextScreen({ patient, onBack }) {
     } finally {
       setLoading(false);
     }
+  };
+
+  const sendVoiceSample = useCallback(async (rec) => {
+    if (!rec) return;
+    try {
+      setVoiceStatus("uploading");
+      await rec.stopAndUnloadAsync();
+      const uri = rec.getURI();
+      recordingRef.current = null;
+      setRecording(null);
+      await uploadVoiceSample(patient.id, uri);
+      setVoiceStatus("done");
+      Alert.alert("Listo", "Muestra de voz registrada correctamente.");
+    } catch (e) {
+      setVoiceStatus(null);
+      Alert.alert("Error", "Error al subir la muestra: " + e.message);
+    }
+  }, [patient.id]);
+
+  const startVoiceRecording = async () => {
+    try {
+      const perm = await Audio.requestPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert("Permiso necesario", "Se necesita acceso al micrófono.");
+        return;
+      }
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      const { recording: rec } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+      recordingRef.current = rec;
+      setRecording(rec);
+      setVoiceStatus("recording");
+      setVoiceProgress(0);
+      progressAnim.setValue(0);
+
+      // Animate the bar smoothly to full over VOICE_DURATION_MS
+      Animated.timing(progressAnim, {
+        toValue: 1,
+        duration: VOICE_DURATION_MS,
+        useNativeDriver: false,
+      }).start();
+
+      // Track progress for the text counter + auto-send at the end
+      let elapsed = 0;
+      timerRef.current = setInterval(() => {
+        elapsed += TICK_MS;
+        const pct = Math.min(elapsed / VOICE_DURATION_MS, 1);
+        setVoiceProgress(pct);
+        if (elapsed >= VOICE_DURATION_MS) {
+          clearInterval(timerRef.current);
+          timerRef.current = null;
+          // Auto-send
+          sendVoiceSample(recordingRef.current);
+        }
+      }, TICK_MS);
+    } catch (e) {
+      Alert.alert("Error", "No se pudo iniciar la grabación: " + e.message);
+    }
+  };
+
+  const cancelVoiceRecording = async () => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    progressAnim.stopAnimation();
+    const rec = recordingRef.current;
+    if (rec) {
+      try {
+        await rec.stopAndUnloadAsync();
+      } catch {}
+      recordingRef.current = null;
+      setRecording(null);
+    }
+    setVoiceStatus(null);
+    setVoiceProgress(0);
   };
 
   const handleSave = async () => {
@@ -142,6 +237,44 @@ export default function PatientContextScreen({ patient, onBack }) {
         numberOfLines={4}
       />
 
+      <Text style={styles.label}>Muestra de voz del paciente</Text>
+      <Text style={styles.hint}>
+        Graba 10 segundos del paciente hablando para identificar su voz. Se envía automáticamente al completarse.
+      </Text>
+      {voiceStatus === "recording" ? (
+        <View>
+          <View style={styles.progressContainer}>
+            <Animated.View
+              style={[
+                styles.progressBar,
+                {
+                  width: progressAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: ["0%", "100%"],
+                  }),
+                },
+              ]}
+            />
+          </View>
+          <Text style={styles.progressText}>
+            {Math.round(voiceProgress * 10)}s / 10s
+          </Text>
+          <Pressable style={[styles.voiceBtn, styles.voiceBtnCancel]} onPress={cancelVoiceRecording}>
+            <Text style={styles.voiceBtnText}>✕ Cancelar grabación</Text>
+          </Pressable>
+        </View>
+      ) : voiceStatus === "uploading" ? (
+        <View style={[styles.voiceBtn, styles.voiceBtnDisabled]}>
+          <Text style={styles.voiceBtnText}>Subiendo muestra...</Text>
+        </View>
+      ) : (
+        <Pressable style={styles.voiceBtn} onPress={startVoiceRecording}>
+          <Text style={styles.voiceBtnText}>
+            {voiceStatus === "done" ? "🎙 Regrabar muestra de voz" : "🎙 Grabar muestra de voz"}
+          </Text>
+        </Pressable>
+      )}
+
       <Pressable style={styles.saveBtn} onPress={handleSave}>
         <Text style={styles.saveText}>Guardar contexto</Text>
       </Pressable>
@@ -175,4 +308,33 @@ const styles = StyleSheet.create({
     marginBottom: 40,
   },
   saveText: { color: "#fff", fontSize: 17, fontWeight: "700" },
+  voiceBtn: {
+    backgroundColor: "#27AE60",
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: "center",
+    marginTop: 8,
+  },
+  voiceBtnCancel: { backgroundColor: "#E74C3C" },
+  voiceBtnDisabled: { backgroundColor: "#999" },
+  voiceBtnText: { color: "#fff", fontSize: 15, fontWeight: "600" },
+  progressContainer: {
+    height: 20,
+    backgroundColor: "#E0E0E0",
+    borderRadius: 10,
+    marginTop: 10,
+    overflow: "hidden",
+  },
+  progressBar: {
+    height: "100%",
+    backgroundColor: "#27AE60",
+    borderRadius: 10,
+  },
+  progressText: {
+    textAlign: "center",
+    marginTop: 6,
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#333",
+  },
 });

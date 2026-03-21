@@ -1,4 +1,4 @@
-# Documentación de módulos — TFG-DEMENCIA
+# Documentación de módulos - TFG-DEMENCIA
 
 Este documento explica en detalle cómo funciona cada módulo del sistema.
 
@@ -6,7 +6,7 @@ Este documento explica en detalle cómo funciona cada módulo del sistema.
 
 ## 1. Backend (`backend/src/`)
 
-### 1.1 `server.py` — Entry Point
+### 1.1 `server.py` - Entry Point
 
 El punto de entrada de la aplicación FastAPI. Responsabilidades:
 - Inicializa la app con CORS habilitado (necesario para peticiones desde Expo).
@@ -14,13 +14,13 @@ El punto de entrada de la aplicación FastAPI. Responsabilidades:
 - En el evento `lifespan`, ejecuta `Base.metadata.create_all()` para crear las tablas automáticamente si no existen (conveniente para desarrollo).
 - Endpoint `/health` verifica el estado del backend y la disponibilidad del LLM.
 
-### 1.2 `config.py` — Configuración centralizada
+### 1.2 `config.py` - Configuración centralizada
 
 Dataclass que carga toda la configuración desde variables de entorno con defaults sensibles para desarrollo local. Se instancia como singleton `config` al importar.
 
 Diseño: un único punto de verdad para configuración. Si se necesitara `.env` file support, se añadiría `python-dotenv` sin cambiar la estructura.
 
-### 1.3 `database.py` — Conexión a MariaDB
+### 1.3 `database.py` - Conexión a MariaDB
 
 Configura SQLAlchemy con:
 - `create_engine()` para crear el pool de conexiones.
@@ -28,7 +28,7 @@ Configura SQLAlchemy con:
 - `get_db()` como dependency para FastAPI (patrón yield para auto-cerrar sesiones).
 - `Base` como clase base declarativa para todos los modelos ORM.
 
-### 1.4 `auth.py` — Autenticación JWT
+### 1.4 `auth.py` - Autenticación JWT
 
 Sistema de autenticación basado en tokens JWT:
 - **`hash_password()`**: Hashea con bcrypt vía passlib.
@@ -42,7 +42,7 @@ Flujo:
 Login → JWT emitido → Cliente envía en header → get_current_user() valida → require_X() verifica rol
 ```
 
-### 1.5 `models/` — Modelos ORM (SQLAlchemy)
+### 1.5 `models/` - Modelos ORM (SQLAlchemy)
 
 | Modelo | Tabla | Descripción |
 |---|---|---|
@@ -50,7 +50,7 @@ Login → JWT emitido → Cliente envía en header → get_current_user() valida
 | `Patient` | `patients` | Perfil extendido del paciente (1:1 con User donde role='patient'). |
 | `PatientContext` | `patient_context` | JSON flexible con el contexto personalizado del paciente. 1:1 con Patient. |
 | `Transcript` | `transcripts` | Cada transcripción generada por Whisper. Vinculada al paciente. |
-| `Alert` | `alerts` | Alertas generadas por episodios detectados. Estados: NEW→ACK→CLOSED. |
+| `Alert` | `alerts` | Alertas generadas por episodios detectados. Estados: NEW→ACK. |
 | `ConversationHistory` | `conversation_history` | Historial de conversación en modo asistente (futuro multi-turno). |
 
 **Relaciones clave:**
@@ -61,7 +61,7 @@ User(caregiver) ──1:N──> User(patient) ──1:1──> Patient ──1:
                                                     └──1:N──> Alert ──1:N──> ConversationHistory
 ```
 
-### 1.6 `schemas/` — Schemas Pydantic
+### 1.6 `schemas/` - Schemas Pydantic
 
 Definen la estructura de request/response para la API:
 - `auth.py`: `RegisterRequest`, `LoginRequest`, `TokenResponse`, `UserOut`
@@ -70,7 +70,7 @@ Definen la estructura de request/response para la API:
 
 Las schemas usan `from_attributes = True` para serializar directamente desde objetos SQLAlchemy.
 
-### 1.7 `routes/` — Endpoints de la API
+### 1.7 `routes/` - Endpoints de la API
 
 #### `routes/auth.py`
 - **POST `/auth/register`**: Crea usuario (caregiver o patient). Si es paciente, crea también el perfil Patient y un contexto por defecto con frases gatillo básicas ("ayuda", "no sé dónde estoy").
@@ -95,25 +95,25 @@ Las schemas usan `from_attributes = True` para serializar directamente desde obj
 
 #### `routes/alerts.py`
 - **GET `/alerts/`**: Lista alertas de los pacientes del cuidador. Filtros opcionales por `patient_id` y `status`.
-- **POST `/alerts/{id}/ack`**: Cambia el estado de una alerta a ACK o CLOSED.
+- **POST `/alerts/{id}/ack`**: Cambia el estado de una alerta a ACK.
 
-### 1.8 `services/stt_service.py` — Transcripción
+### 1.8 `services/stt_service.py` - Transcripción
 
 Wrapper alrededor de OpenAI Whisper:
 - Carga el modelo de forma lazy (singleton) en el device configurado (GPU/CPU).
 - `transcribe_audio()` recibe un path de archivo y devuelve texto + idioma.
 - Modelo configurable via `STT_MODEL` (base, small, medium, large-v3-turbo).
 
-### 1.9 `services/episode_detector.py` — Detección de episodios
+### 1.9 `services/episode_detector.py` - Detección de episodios
 
 Motor de detección en **dos fases**:
 
-**Fase 1 — Reglas (determinista, instantánea):**
+**Fase 1 - Reglas (determinista, instantánea):**
 - Busca coincidencias exactas con `trigger_phrases` del contexto.
 - Busca matches regex con `risk_rules`.
 - Si hay coincidencia de severidad ≥ 4, responde inmediatamente.
 
-**Fase 2 — LLM (contextual, más lenta):**
+**Fase 2 - LLM (contextual, más lenta):**
 - Solo se ejecuta si la Fase 1 no encontró nada.
 - Envía un prompt de análisis al LLM con las reglas del contexto y la transcripción.
 - Espera respuesta en JSON: `{episode: bool, severity: int, reason: str}`.
@@ -124,7 +124,7 @@ Motor de detección en **dos fases**:
 - El LLM genera un mensaje corto, calmado, en español.
 - Este texto se devuelve al móvil para TTS.
 
-### 1.10 `services/llm/` — Strategy Pattern para proveedores LLM
+### 1.10 `services/llm/` - Strategy Pattern para proveedores LLM
 
 **Patrón de diseño: Strategy + Factory**
 
@@ -162,7 +162,7 @@ Motor de detección en **dos fases**:
 
 ## 2. Frontend (`frontend/app/`)
 
-### 2.1 `App.js` — Root con routing por rol
+### 2.1 `App.js` - Root con routing por rol
 
 Componente raíz que maneja el estado de sesión:
 - Si no hay usuario: muestra `LoginScreen`.
@@ -181,7 +181,7 @@ Pantalla de login/registro unificada:
 
 ### 2.3 `screens/PatientHomeScreen.js`
 
-Interfaz del paciente — modo escucha:
+Interfaz del paciente - modo escucha:
 - Botón circular grande para activar/desactivar la escucha.
 - Cuando está activo, graba audio en chunks de 15 segundos.
 - Ciclo: grabar → parar → enviar al backend → grabar de nuevo.

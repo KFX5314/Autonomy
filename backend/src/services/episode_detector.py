@@ -31,23 +31,30 @@ def _build_system_prompt(context: dict) -> str:
     name = profile.get("preferred_name", "el paciente")
     address = profile.get("current_address", "su domicilio")
     caregivers = ", ".join(profile.get("caregiver_names", []))
+    medical_notes = profile.get("medical_notes", [])
     style = context.get("assistant_style", {})
     tone = style.get("tone", "calmado")
     max_words = style.get("max_words", 40)
 
-    return (
+    prompt = (
         f"Eres un asistente para una persona con demencia llamada {name}. "
         f"Responde SIEMPRE en español, con frases cortas, tono {tone}, máximo {max_words} palabras. "
         f"No inventes datos. No des consejos médicos. No menciones que eres una IA.\n"
         f"Contexto: {name} está en {address}. "
         f"Cuidadores: {caregivers}.\n"
-        f"Si la persona está confundida, oriéntala con calma y dile que su cuidador va a ser avisado."
     )
+    if medical_notes:
+        notes_str = "; ".join(medical_notes)
+        prompt += f"Notas médicas importantes: {notes_str}.\n"
+    prompt += "Si la persona está confundida, oriéntala con calma y dile que su cuidador va a ser avisado."
+    return prompt
 
 
 def _build_analysis_prompt(context: dict, transcript: str) -> str:
     triggers = context.get("trigger_phrases", [])
     rules = context.get("risk_rules", [])
+    profile = context.get("static_profile", {})
+    medical_notes = profile.get("medical_notes", [])
 
     trigger_lines = []
     for t in triggers:
@@ -65,11 +72,23 @@ def _build_analysis_prompt(context: dict, transcript: str) -> str:
             rule_lines.append(f'- patrón: "{r["pattern"]}" → riesgo: {r.get("risk", "desconocido")}')
     rule_list = "\n".join(rule_lines)
 
+    medical_section = ""
+    if medical_notes:
+        notes_str = "\n".join(f"- {n}" for n in medical_notes)
+        medical_section = (
+            f"\nNotas médicas del paciente (IMPORTANTE - detectar si la transcripción "
+            f"contradice o pone en peligro alguna de estas condiciones):\n{notes_str}\n"
+        )
+
     return (
-        f"Analiza la siguiente transcripción del paciente y decide si está teniendo un episodio "
-        f"de desorientación o necesita ayuda.\n\n"
+        f"Analiza la siguiente transcripción y decide si el paciente está teniendo un episodio "
+        f"de desorientación, necesita ayuda, o está diciendo algo peligroso según su historial médico.\n\n"
+        f"IMPORTANTE: La transcripción puede contener etiquetas [PACIENTE] y [OTRO]. "
+        f"Las frases del [PACIENTE] son las que debes analizar con más atención. "
+        f"Las frases de [OTRO] son de acompañantes y dan contexto pero no son del paciente.\n\n"
         f"Frases gatillo conocidas:\n{trigger_list}\n\n"
-        f"Reglas de riesgo:\n{rule_list}\n\n"
+        f"Reglas de riesgo:\n{rule_list}\n"
+        f"{medical_section}\n"
         f"Transcripción: \"{transcript}\"\n\n"
         f"Responde SOLO con un JSON así: "
         f'{{\"episode\": true/false, \"severity\": 0-5, \"reason\": \"explicación breve\"}}'

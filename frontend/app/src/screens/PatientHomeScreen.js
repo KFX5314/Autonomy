@@ -1,5 +1,10 @@
 /**
- * Patient Home — continuous recording + episode alert display.
+ * Patient Home - continuous recording with adaptive silence detection.
+ *
+ * Instead of fixed 15 s chunks, we track a rolling ambient-noise baseline
+ * via expo-av metering.  When speech raises the energy above baseline and
+ * then drops back for SILENCE_DURATION_MS, the chunk is sent immediately.
+ * MAX_CHUNK_MS (15 s) is kept as a hard ceiling.
  */
 import React, { useRef, useState, useEffect, useCallback } from "react";
 import { View, Text, Pressable, StyleSheet, Alert } from "react-native";
@@ -7,15 +12,23 @@ import { Audio } from "expo-av";
 import * as Speech from "expo-speech";
 import { sendAudioChunk } from "../services/api";
 
-const CHUNK_DURATION_MS = 15000; // 15 seconds per chunk
+/* ── VAD tuning knobs ─────────────────────────────────────── */
+const SPEECH_THRESHOLD_DB = 8;      // dB above baseline → "speech"
+const SILENCE_DURATION_MS = 1500;   // quiet after speech → send
+const MIN_CHUNK_MS        = 2000;   // never send before 2 s
+const MAX_CHUNK_MS        = 15000;  // hard ceiling per chunk
+const METER_INTERVAL_MS   = 250;    // metering poll rate
+const BASELINE_ALPHA      = 0.10;   // EMA smoothing for baseline
 
 export default function PatientHomeScreen({ user, onLogout }) {
   const [listening, setListening] = useState(false);
   const [status, setStatus] = useState("Listo");
   const [lastReply, setLastReply] = useState(null);
   const recordingRef = useRef(null);
-  const intervalRef = useRef(null);
+  const abortRef     = useRef(null);   // AbortController
+  const meteringRef  = useRef(-160);   // latest dB from expo-av
 
+  /* ── start a metering-enabled recording ─────────────────── */
   const startRecording = async () => {
     try {
       const perm = await Audio.requestPermissionsAsync();
@@ -29,7 +42,9 @@ export default function PatientHomeScreen({ user, onLogout }) {
       });
 
       const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
+        { ...Audio.RecordingOptionsPresets.HIGH_QUALITY, isMeteringEnabled: true },
+        (s) => { if (s.metering != null) meteringRef.current = s.metering; },
+        METER_INTERVAL_MS,
       );
       recordingRef.current = recording;
     } catch (e) {
@@ -37,6 +52,7 @@ export default function PatientHomeScreen({ user, onLogout }) {
     }
   };
 
+  /* ── stop current recording and send to backend ─────────── */
   const stopAndSend = async () => {
     const recording = recordingRef.current;
     if (!recording) return;
@@ -55,35 +71,109 @@ export default function PatientHomeScreen({ user, onLogout }) {
 
       if (result.episode && result.reply_text) {
         setLastReply(result.reply_text);
-        // Speak the response to the patient
         Speech.speak(result.reply_text, { language: "es-ES", rate: 0.85 });
-        setStatus("⚠️ Episodio detectado — Tu responsable ha sido avisado");
+        setStatus("⚠️ Episodio detectado - Tu responsable ha sido avisado");
       } else {
         setStatus("Escuchando...");
       }
     } catch (e) {
       console.error("Error processing chunk:", e);
-      setStatus("Error procesando audio");
+      setStatus("Escuchando...");
+    }
+  };
+
+  /* ── discard recording without sending ──────────────────── */
+  const discardRecording = async () => {
+    const recording = recordingRef.current;
+    if (!recording) return;
+    try {
+      await recording.stopAndUnloadAsync();
+    } catch (_) { /* already stopped */ }
+    recordingRef.current = null;
+  };
+
+  /* ── adaptive silence-detection wait ────────────────────── *
+   * Resolves with:
+   *   "silence"  – speech detected then quiet for SILENCE_DURATION_MS
+   *   "timeout"  – MAX_CHUNK_MS reached (with speech)
+   *   "quiet"    – MAX_CHUNK_MS reached with no speech at all
+   *   "aborted"  – user pressed stop
+   */
+  const waitForSilenceOrTimeout = (signal) =>
+    new Promise((resolve) => {
+      let resolved = false;
+      const done = (reason) => {
+        if (resolved) return;
+        resolved = true;
+        clearInterval(interval);
+        resolve(reason);
+      };
+
+      const startTime = Date.now();
+      let baseline = null;
+      let speechDetected = false;
+      let silenceSince = null;
+
+      const interval = setInterval(() => {
+        const elapsed = Date.now() - startTime;
+        const dB = meteringRef.current;
+
+        // first reading seeds the baseline
+        if (baseline === null) { baseline = dB; return; }
+
+        const isSpeech = dB > baseline + SPEECH_THRESHOLD_DB;
+
+        // adapt baseline only during non-speech
+        if (!isSpeech) {
+          baseline = baseline * (1 - BASELINE_ALPHA) + dB * BASELINE_ALPHA;
+        }
+
+        if (isSpeech) {
+          speechDetected = true;
+          silenceSince = null;
+        } else if (speechDetected) {
+          if (!silenceSince) silenceSince = Date.now();
+          if (Date.now() - silenceSince >= SILENCE_DURATION_MS &&
+              elapsed >= MIN_CHUNK_MS) {
+            done("silence");
+            return;
+          }
+        }
+
+        if (elapsed >= MAX_CHUNK_MS) {
+          done(speechDetected ? "timeout" : "quiet");
+        }
+      }, METER_INTERVAL_MS);
+
+      signal.addEventListener("abort", () => done("aborted"), { once: true });
+    });
+
+  /* ── main loop ──────────────────────────────────────────── */
+  const recordLoop = async (signal) => {
+    while (!signal.aborted) {
+      await startRecording();
+      const reason = await waitForSilenceOrTimeout(signal);
+      if (signal.aborted) break;
+
+      if (reason === "quiet") {
+        // no speech in this window — discard & loop
+        await discardRecording();
+        continue;
+      }
+      await stopAndSend();
     }
   };
 
   const startListening = useCallback(async () => {
+    const controller = new AbortController();
+    abortRef.current = controller;
     setListening(true);
     setStatus("Escuchando...");
-    await startRecording();
-
-    // Cycle: record → send → record every CHUNK_DURATION_MS
-    intervalRef.current = setInterval(async () => {
-      await stopAndSend();
-      await startRecording();
-    }, CHUNK_DURATION_MS);
+    recordLoop(controller.signal);
   }, []);
 
   const stopListening = useCallback(async () => {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
+    abortRef.current?.abort();
     await stopAndSend();
     setListening(false);
     setStatus("Listo");
@@ -91,7 +181,7 @@ export default function PatientHomeScreen({ user, onLogout }) {
 
   useEffect(() => {
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      abortRef.current?.abort();
     };
   }, []);
 
