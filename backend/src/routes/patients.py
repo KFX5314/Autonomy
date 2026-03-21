@@ -1,5 +1,5 @@
 """
-Patient management routes — used by caregivers.
+Patient management routes - used by caregivers.
 """
 
 import os

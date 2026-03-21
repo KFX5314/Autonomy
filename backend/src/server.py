@@ -1,5 +1,5 @@
 """
-TFG-DEMENCIA Backend — FastAPI application entry point.
+TFG-DEMENCIA Backend - FastAPI application entry point.
 
 Run with:
     uvicorn src.server:app --host 0.0.0.0 --port 8000 --reload
@@ -36,7 +36,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — allow the Expo dev client
+# CORS - allow the Expo dev client
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

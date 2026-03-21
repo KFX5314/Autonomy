@@ -3,8 +3,8 @@ Episode detection engine.
 
 Evaluates a transcript against the patient's context to decide whether
 an episode is occurring. Uses a two-stage approach:
-  1. Rule-based matching (fast, deterministic) — trigger phrases and regex patterns.
-  2. LLM-based analysis (optional, richer) — contextual understanding.
+  1. Rule-based matching (fast, deterministic) - trigger phrases and regex patterns.
+  2. LLM-based analysis (optional, richer) - contextual understanding.
 
 If stage 1 finds a high-severity match, it can skip LLM for speed.
 """
@@ -129,7 +129,7 @@ class EpisodeDetector:
         rule_result = self._rule_based_check(transcript)
 
         if rule_result and rule_result.severity >= 4:
-            # High severity — generate calming response via LLM if available
+            # High severity - generate calming response via LLM if available
             if use_llm:
                 try:
                     llm = get_llm_provider()
@@ -141,7 +141,7 @@ class EpisodeDetector:
             return rule_result
 
         if rule_result:
-            # Lower severity rule match — still generate LLM response
+            # Lower severity rule match - still generate LLM response
             if use_llm:
                 try:
                     llm = get_llm_provider()

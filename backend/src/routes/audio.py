@@ -78,7 +78,7 @@ async def process_audio_chunk(
             speaker_tag = "[PACIENTE]" if is_patient else "[DESCONOCIDO]"
             transcript_text = f"{speaker_tag} {transcript_text}"
         else:
-            print("\033[93m  ⚠  Sin muestra de voz — no se identifica hablante\033[0m")
+            print("\033[93m  ⚠  Sin muestra de voz - no se identifica hablante\033[0m")
 
         # 2. Store transcript
         transcript = Transcript(

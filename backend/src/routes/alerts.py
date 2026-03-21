@@ -1,5 +1,5 @@
 """
-Alert routes — used by caregivers to monitor and acknowledge alerts.
+Alert routes - used by caregivers to monitor and acknowledge alerts.
 """
 
 from fastapi import APIRouter, Depends, HTTPException

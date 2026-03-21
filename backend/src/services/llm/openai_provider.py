@@ -1,5 +1,5 @@
 """
-OpenAI-compatible provider — demonstrates scalability to cloud APIs.
+OpenAI-compatible provider - demonstrates scalability to cloud APIs.
 Works with OpenAI, Azure OpenAI, OpenRouter, or any compatible endpoint.
 """
 
