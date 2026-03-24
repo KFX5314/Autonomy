@@ -6,6 +6,7 @@ runs STT + episode detection, returns result.
 import tempfile
 import os
 import time
+import subprocess
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
@@ -60,10 +61,30 @@ async def process_audio_chunk(
         print(f"\n\033[96m{'═'*60}\033[0m")
         print(f"\033[96m  ⏱  AUDIO RECIBIDO {datetime.now().strftime('%H:%M:%S.%f')[:-3]}\033[0m")
 
+        # 0. Check audio duration — reject files > 30s
+        MAX_AUDIO_SECONDS = 30
+        audio_duration = None
+        try:
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", tmp_path],
+                capture_output=True, text=True, timeout=5,
+            )
+            audio_duration = float(probe.stdout.strip())
+            print(f"\033[96m  📏 DURACIÓN AUDIO: {audio_duration:.1f}s\033[0m")
+            if audio_duration > MAX_AUDIO_SECONDS:
+                print(f"\033[93m  ⚠  Audio demasiado largo ({audio_duration:.1f}s > {MAX_AUDIO_SECONDS}s) — descartado\033[0m")
+                return AudioChunkResponse(
+                    transcript="", episode=False, severity=0,
+                    reason=f"Audio demasiado largo ({audio_duration:.0f}s)",
+                )
+        except Exception as e:
+            logger.warning(f"Could not probe audio duration: {e}")
+
         # 1. Transcribe (with segment timestamps)
         now = datetime.now(timezone.utc)
         t_stt_start = time.time()
-        stt_result = transcribe_audio(tmp_path)
+        stt_result = transcribe_audio(tmp_path, audio_duration=audio_duration)
         t_stt_end = time.time()
         transcript_text = stt_result["text"]
         segments = stt_result.get("segments", [])
@@ -71,7 +92,7 @@ async def process_audio_chunk(
         print(f"\033[96m  ⏱  WHISPER ({config.STT_MODEL}): {t_stt_end - t_stt_start:.2f}s\033[0m")
 
         if not transcript_text.strip():
-            print("\033[90m  ... silencio / audio vacío\033[0m")
+            print("\033[90m  ... silencio / audio vacío (o alucinación filtrada)\033[0m")
             return AudioChunkResponse(
                 transcript="", episode=False, severity=0,
                 reason="Silencio o audio no reconocido",
@@ -151,6 +172,7 @@ async def process_audio_chunk(
             reason=result.reason or "",
             reply_text=result.llm_response,
             alert_id=alert_id,
+            segments=[{"start": s["start"], "end": s["end"]} for s in segments],
         )
     finally:
         os.unlink(tmp_path)

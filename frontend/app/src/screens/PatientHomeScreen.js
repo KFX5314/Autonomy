@@ -1,32 +1,33 @@
 /**
  * Patient Home - continuous recording with adaptive silence detection.
  *
- * Instead of fixed 15 s chunks, we track a rolling ambient-noise baseline
- * via expo-av metering.  When speech raises the energy above baseline and
- * then drops back for SILENCE_DURATION_MS, the chunk is sent immediately.
- * MAX_CHUNK_MS (15 s) is kept as a hard ceiling.
+ * Uses a calibrated dBFS threshold that auto-adjusts after each chunk
+ * by analysing which metering readings correspond to speech vs silence
+ * (from Whisper's segment timestamps).
  */
 import React, { useRef, useState, useEffect, useCallback } from "react";
-import { View, Text, Pressable, StyleSheet, Alert } from "react-native";
+import { View, Text, Pressable, StyleSheet, Alert, AppState } from "react-native";
 import { Audio } from "expo-av";
 import * as Speech from "expo-speech";
 import { sendAudioChunk } from "../services/api";
 
 /* ── VAD tuning knobs ─────────────────────────────────────── */
-const SPEECH_THRESHOLD_DB = 8;      // dB above baseline → "speech"
-const SILENCE_DURATION_MS = 1500;   // quiet after speech → send
-const MIN_CHUNK_MS        = 2000;   // never send before 2 s
-const MAX_CHUNK_MS        = 15000;  // hard ceiling per chunk
-const METER_INTERVAL_MS   = 250;    // metering poll rate
-const BASELINE_ALPHA      = 0.10;   // EMA smoothing for baseline
+const DEFAULT_THRESHOLD    = -50;   // initial dBFS threshold (before calibration)
+const SILENCE_DURATION_MS  = 1500;  // quiet after speech → send
+const MIN_CHUNK_MS         = 2000;  // never send before 2 s
+const MAX_CHUNK_MS         = 15000; // hard ceiling per chunk
+const POLL_INTERVAL_MS     = 250;   // how often to poll metering
+const SPEECH_CONFIRM_COUNT = 2;     // consecutive polls above threshold to confirm speech
 
 export default function PatientHomeScreen({ user, onLogout }) {
   const [listening, setListening] = useState(false);
   const [status, setStatus] = useState("Listo");
   const [lastReply, setLastReply] = useState(null);
-  const recordingRef = useRef(null);
-  const abortRef     = useRef(null);   // AbortController
-  const meteringRef  = useRef(-160);   // latest dB from expo-av
+  const recordingRef  = useRef(null);
+  const abortRef      = useRef(null);
+  const listeningRef  = useRef(false);
+  const thresholdRef  = useRef(DEFAULT_THRESHOLD);  // calibrated threshold, persists across chunks
+  const meteringRef   = useRef([]);                  // [{t: seconds, dB: number}] for current chunk
 
   /* ── start a metering-enabled recording ─────────────────── */
   const startRecording = async () => {
@@ -40,11 +41,9 @@ export default function PatientHomeScreen({ user, onLogout }) {
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
       });
-
+      meteringRef.current = [];
       const { recording } = await Audio.Recording.createAsync(
         { ...Audio.RecordingOptionsPresets.HIGH_QUALITY, isMeteringEnabled: true },
-        (s) => { if (s.metering != null) meteringRef.current = s.metering; },
-        METER_INTERVAL_MS,
       );
       recordingRef.current = recording;
     } catch (e) {
@@ -56,29 +55,26 @@ export default function PatientHomeScreen({ user, onLogout }) {
   const stopAndSend = async () => {
     const recording = recordingRef.current;
     if (!recording) return;
-
+    const metering = [...meteringRef.current];
     try {
       await recording.stopAndUnloadAsync();
       const uri = recording.getURI();
       recordingRef.current = null;
-
-      setStatus("Procesando...");
-      const result = await sendAudioChunk(uri);
-
-      if (result.transcript) {
-        setStatus(`Escuchado: "${result.transcript.substring(0, 60)}..."`);
-      }
-
-      if (result.episode && result.reply_text) {
-        setLastReply(result.reply_text);
-        Speech.speak(result.reply_text, { language: "es-ES", rate: 0.85 });
-        setStatus("⚠️ Episodio detectado - Tu responsable ha sido avisado");
-      } else {
-        setStatus("Escuchando...");
+      if (uri) {
+        setStatus("Procesando...");
+        const result = await sendAudioChunk(uri);
+        calibrateThreshold(metering, result.segments || []);
+        if (result.transcript) {
+          setStatus(`Escuchado: "${result.transcript.substring(0, 60)}..."`);
+        }
+        if (result.episode && result.reply_text) {
+          setLastReply(result.reply_text);
+          Speech.speak(result.reply_text, { language: "es-ES", rate: 0.85 });
+          setStatus("⚠️ Episodio detectado - Tu responsable ha sido avisado");
+        }
       }
     } catch (e) {
       console.error("Error processing chunk:", e);
-      setStatus("Escuchando...");
     }
   };
 
@@ -86,19 +82,52 @@ export default function PatientHomeScreen({ user, onLogout }) {
   const discardRecording = async () => {
     const recording = recordingRef.current;
     if (!recording) return;
-    try {
-      await recording.stopAndUnloadAsync();
-    } catch (_) { /* already stopped */ }
+    try { await recording.stopAndUnloadAsync(); } catch (_) {}
     recordingRef.current = null;
   };
 
-  /* ── adaptive silence-detection wait ────────────────────── *
-   * Resolves with:
-   *   "silence"  – speech detected then quiet for SILENCE_DURATION_MS
-   *   "timeout"  – MAX_CHUNK_MS reached (with speech)
-   *   "quiet"    – MAX_CHUNK_MS reached with no speech at all
-   *   "aborted"  – user pressed stop
+  /* ── calibrate threshold using Whisper segments + metering ─
+   * speech samples: metering during Whisper segments → lowest = speech floor
+   * silence samples: metering outside Whisper segments → typical = silence level
+   * threshold = midpoint between silence level and speech floor
    */
+  const calibrateThreshold = (metering, segments) => {
+    if (!metering.length || !segments.length) return;
+
+    const speechSamples = [];
+    const silenceSamples = [];
+
+    for (const m of metering) {
+      if (m.dB <= -155) continue; // skip broken readings
+      const inSpeech = segments.some(s => m.t >= s.start && m.t <= s.end);
+      if (inSpeech) speechSamples.push(m.dB);
+      else silenceSamples.push(m.dB);
+    }
+
+    if (speechSamples.length < 2 || silenceSamples.length < 2) return;
+
+    // Speech floor = 10th percentile of speech readings (robustly low)
+    speechSamples.sort((a, b) => a - b);
+    const speechFloor = speechSamples[Math.floor(speechSamples.length * 0.1)];
+
+    // Silence level = 90th percentile of silence readings (robustly high)
+    silenceSamples.sort((a, b) => a - b);
+    const silenceLevel = silenceSamples[Math.floor(silenceSamples.length * 0.9)];
+
+    // Only calibrate if there's a clear gap (at least 5 dB)
+    if (speechFloor - silenceLevel < 5) {
+      console.log(`[CAL] Gap too small: speech floor ${speechFloor.toFixed(0)}, silence ${silenceLevel.toFixed(0)} — keeping threshold ${thresholdRef.current.toFixed(0)}`);
+      return;
+    }
+
+    const newThreshold = (speechFloor + silenceLevel) / 2;
+    // Clamp to reasonable range
+    const clamped = Math.max(-80, Math.min(-20, newThreshold));
+    console.log(`[CAL] speech floor=${speechFloor.toFixed(0)} silence=${silenceLevel.toFixed(0)} → threshold: ${thresholdRef.current.toFixed(0)} → ${clamped.toFixed(0)}`);
+    thresholdRef.current = clamped;
+  };
+
+  /* ── adaptive silence-detection wait ────────────────────── */
   const waitForSilenceOrTimeout = (signal) =>
     new Promise((resolve) => {
       let resolved = false;
@@ -110,45 +139,106 @@ export default function PatientHomeScreen({ user, onLogout }) {
       };
 
       const startTime = Date.now();
-      let baseline = null;
       let speechDetected = false;
+      let speechCount = 0;
       let silenceSince = null;
+      let pollCount = 0;
+      let peakDb = -160;
 
-      const interval = setInterval(() => {
+      const interval = setInterval(async () => {
+        if (resolved || !recordingRef.current) return;
+
         const elapsed = Date.now() - startTime;
-        const dB = meteringRef.current;
+        pollCount++;
 
-        // first reading seeds the baseline
-        if (baseline === null) { baseline = dB; return; }
+        let dB = -160;
+        try {
+          const st = await recordingRef.current.getStatusAsync();
+          if (st.metering != null) dB = st.metering;
+        } catch (_) { return; }
 
-        const isSpeech = dB > baseline + SPEECH_THRESHOLD_DB;
+        if (dB > peakDb) peakDb = dB;
 
-        // adapt baseline only during non-speech
-        if (!isSpeech) {
-          baseline = baseline * (1 - BASELINE_ALPHA) + dB * BASELINE_ALPHA;
+        // Store metering sample for calibration (time relative to recording start)
+        meteringRef.current.push({ t: elapsed / 1000, dB });
+
+        const thr = thresholdRef.current;
+
+        // Debug on-screen
+        setStatus(`🎙 dB:${dB.toFixed(0)} thr:${thr.toFixed(0)} ${speechDetected ? '🔴HABLA' : '⚪'} ${(elapsed/1000).toFixed(1)}s`);
+
+        if (pollCount % 4 === 0) {
+          console.log(`[VAD] dB=${dB.toFixed(1)} thr=${thr.toFixed(0)} speech=${speechDetected} count=${speechCount} peak=${peakDb.toFixed(0)} ${(elapsed/1000).toFixed(1)}s`);
         }
 
+        // Metering broken fallback
+        if (elapsed > 2000 && peakDb <= -155) {
+          if (elapsed >= 5000) {
+            console.log("[VAD] Metering unavailable — sending 5s fallback chunk");
+            done("timeout");
+          }
+          return;
+        }
+
+        const isSpeech = dB > thr;
+
         if (isSpeech) {
-          speechDetected = true;
+          speechCount++;
           silenceSince = null;
-        } else if (speechDetected) {
+          if (speechCount >= SPEECH_CONFIRM_COUNT) speechDetected = true;
+        } else {
+          speechCount = 0;
+        }
+
+        if (!isSpeech && speechDetected) {
           if (!silenceSince) silenceSince = Date.now();
-          if (Date.now() - silenceSince >= SILENCE_DURATION_MS &&
-              elapsed >= MIN_CHUNK_MS) {
+          if (Date.now() - silenceSince >= SILENCE_DURATION_MS && elapsed >= MIN_CHUNK_MS) {
+            console.log(`[VAD] Silence after speech — sending (${(elapsed/1000).toFixed(1)}s)`);
             done("silence");
             return;
           }
         }
 
         if (elapsed >= MAX_CHUNK_MS) {
-          done(speechDetected ? "timeout" : "quiet");
+          done(peakDb > thr ? "timeout" : "quiet");
         }
-      }, METER_INTERVAL_MS);
+      }, POLL_INTERVAL_MS);
 
       signal.addEventListener("abort", () => done("aborted"), { once: true });
     });
 
-  /* ── main loop ──────────────────────────────────────────── */
+  /* ── send a finished chunk (fire-and-forget, max 1 in-flight) ── */
+  const sendingRef = useRef(false);
+  const sendInBackground = (uri, metering) => {
+    if (sendingRef.current) {
+      console.log("[VAD] Skipping send — previous chunk still in-flight");
+      return;
+    }
+    sendingRef.current = true;
+    (async () => {
+      try {
+        const result = await sendAudioChunk(uri);
+        calibrateThreshold(metering, result.segments || []);
+
+        if (result.transcript) {
+          setStatus(`Escuchado: "${result.transcript.substring(0, 60)}..."`);
+        }
+        if (result.episode && result.reply_text) {
+          setLastReply(result.reply_text);
+          Speech.speak(result.reply_text, { language: "es-ES", rate: 0.85 });
+          setStatus("⚠️ Episodio detectado - Tu responsable ha sido avisado");
+        } else if (listening) {
+          setStatus("Escuchando...");
+        }
+      } catch (e) {
+        console.error("Error processing chunk:", e);
+      } finally {
+        sendingRef.current = false;
+      }
+    })();
+  };
+
+  /* ── main loop (overlaps recording with sending) ────────── */
   const recordLoop = async (signal) => {
     while (!signal.aborted) {
       await startRecording();
@@ -156,11 +246,22 @@ export default function PatientHomeScreen({ user, onLogout }) {
       if (signal.aborted) break;
 
       if (reason === "quiet") {
-        // no speech in this window — discard & loop
         await discardRecording();
         continue;
       }
-      await stopAndSend();
+
+      const recording = recordingRef.current;
+      if (!recording) continue;
+      const metering = [...meteringRef.current]; // snapshot for calibration
+      try {
+        await recording.stopAndUnloadAsync();
+        const uri = recording.getURI();
+        recordingRef.current = null;
+        if (uri) sendInBackground(uri, metering);
+      } catch (e) {
+        console.error("Error stopping recording:", e);
+        recordingRef.current = null;
+      }
     }
   };
 
@@ -168,19 +269,38 @@ export default function PatientHomeScreen({ user, onLogout }) {
     const controller = new AbortController();
     abortRef.current = controller;
     setListening(true);
+    listeningRef.current = true;
     setStatus("Escuchando...");
     recordLoop(controller.signal);
   }, []);
 
   const stopListening = useCallback(async () => {
     abortRef.current?.abort();
+    listeningRef.current = false;
     await stopAndSend();
     setListening(false);
     setStatus("Listo");
   }, []);
 
+  /* ── AppState: pause recording when phone locks / backgrounds ── */
   useEffect(() => {
+    const subscription = AppState.addEventListener("change", async (nextState) => {
+      if (nextState !== "active") {
+        if (abortRef.current) {
+          console.log("[VAD] App backgrounded — pausing recording");
+          abortRef.current.abort();
+          await discardRecording();
+        }
+      } else if (listeningRef.current) {
+        console.log("[VAD] App foregrounded — resuming recording");
+        const controller = new AbortController();
+        abortRef.current = controller;
+        setStatus("Escuchando...");
+        recordLoop(controller.signal);
+      }
+    });
     return () => {
+      subscription.remove();
       abortRef.current?.abort();
     };
   }, []);

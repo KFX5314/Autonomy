@@ -185,7 +185,26 @@ class EpisodeDetector:
                 # Find JSON in response
                 json_match = re.search(r'\{.*\}', raw, re.DOTALL)
                 if json_match:
-                    parsed = json.loads(json_match.group())
+                    json_str = json_match.group()
+                    # Aggressive JSON repair for phi3 quirks
+                    json_str = re.sub(r',\s*}', '}', json_str)       # trailing commas
+                    json_str = re.sub(r',\s*]', ']', json_str)
+                    json_str = re.sub(r'//.*$', '', json_str, flags=re.MULTILINE)  # JS comments
+                    json_str = json_str.replace("'", '"')            # single → double quotes
+                    # Unquoted keys: word: → "word":
+                    json_str = re.sub(r'(?<=[{,])\s*(\w+)\s*:', r' "\1":', json_str)
+                    try:
+                        parsed = json.loads(json_str)
+                    except json.JSONDecodeError:
+                        # Last resort: extract booleans/numbers with regex
+                        ep_match = re.search(r'episode["\']?\s*:\s*(true|false)', raw, re.IGNORECASE)
+                        sev_match = re.search(r'severity["\']?\s*:\s*(\d)', raw)
+                        reason_match = re.search(r'reason["\']?\s*:\s*["\'](.+?)["\']', raw)
+                        parsed = {
+                            "episode": ep_match.group(1).lower() == "true" if ep_match else False,
+                            "severity": int(sev_match.group(1)) if sev_match else 0,
+                            "reason": reason_match.group(1) if reason_match else "Análisis LLM",
+                        }
                     is_episode = bool(parsed.get("episode", False))
                     severity = int(parsed.get("severity") or 0)
                     reason = parsed.get("reason") or "Análisis LLM"

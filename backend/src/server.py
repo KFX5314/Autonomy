@@ -37,10 +37,16 @@ async def lifespan(app: FastAPI):
     from .services.speaker_id_service import warmup as warmup_speaker
     warmup_speaker()
 
-    # 3. Ollama: verify model is available (won't auto-download)
+    # 3. Ollama: verify model is available and warm up with a tiny inference
     llm = get_llm_provider()
     if isinstance(llm, OllamaProvider):
         await llm.check_model()
+        try:
+            logger.info("Warming up Ollama (first inference)...")
+            await llm.generate("Responde OK.", "test")
+            logger.info("Ollama warm-up done.")
+        except Exception as e:
+            logger.warning(f"Ollama warm-up inference failed: {e}")
 
     logger.info("All models ready. Server accepting requests.")
     yield

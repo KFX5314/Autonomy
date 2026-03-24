@@ -97,7 +97,7 @@ def diarize_segments(
     audio_path: str,
     segments: list[dict],
     patient_embedding: list[float],
-    threshold: float = 0.65,
+    threshold: float = 0.60,
 ) -> list[dict]:
     """
     Per-segment speaker identification.
@@ -122,8 +122,9 @@ def diarize_segments(
         seg_wav = wav[start_sample:end_sample]
 
         if len(seg_wav) < MIN_SAMPLES:
-            # Too short — inherit from last speaker or default to OTRO
-            seg["speaker"] = last_speaker or "OTRO"
+            # Too short — inherit from last speaker or default to PACIENTE
+            # (patient holds the phone, so most short utterances are theirs)
+            seg["speaker"] = last_speaker or "PACIENTE"
             sim_str = "---"
             tag_reason = "corto"
         else:

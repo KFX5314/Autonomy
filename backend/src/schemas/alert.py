@@ -26,3 +26,4 @@ class AudioChunkResponse(BaseModel):
     reason: str = ""
     reply_text: str | None = None
     alert_id: int | None = None
+    segments: list[dict] = []    # [{"start": float, "end": float}] for VAD calibration
