@@ -57,7 +57,7 @@ export default function LoginScreen({ onLogin }) {
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-        <Text style={styles.title}>🧠 Asistente</Text>
+        <Text style={styles.title}>Asistente</Text>
         <Text style={styles.subtitle}>
           {isRegister ? "Crear cuenta" : "Iniciar sesión"}
         </Text>
