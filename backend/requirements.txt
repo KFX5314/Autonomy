@@ -14,8 +14,8 @@ passlib[bcrypt]>=1.7
 pydantic[email]>=2.0
 bcrypt>=4.0,<4.1  # passlib incompatible with bcrypt 4.1+
 
-# STT
-openai-whisper>=20231117
+# STT (faster-whisper uses CTranslate2; built-in silero-vad via vad_filter=True)
+faster-whisper>=1.0.3
 
 # Speaker identification
 resemblyzer>=0.1.3
