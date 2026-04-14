@@ -25,6 +25,11 @@ class Config:
     STT_MODEL: str = field(default_factory=lambda: os.getenv("STT_MODEL", "medium"))
     STT_DEVICE: str = field(default_factory=lambda: os.getenv("STT_DEVICE", "cuda"))
 
+    # Speaker diarization (SpeechBrain ECAPA-TDNN).
+    # ECAPA is tiny (~14 MB) and CPU inference is fast enough (<100 ms per segment),
+    # so we default to CPU to keep CUDA VRAM free for Whisper + LLM.
+    SPEAKER_DEVICE: str = field(default_factory=lambda: os.getenv("SPEAKER_DEVICE", "cpu"))
+
     # LLM Provider: "ollama" | "openai"
     LLM_PROVIDER: str = field(default_factory=lambda: os.getenv("LLM_PROVIDER", "ollama"))
     LLM_MODEL: str = field(default_factory=lambda: os.getenv("LLM_MODEL", "phi3:mini"))
