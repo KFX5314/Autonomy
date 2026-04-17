@@ -32,7 +32,7 @@ class Config:
 
     # LLM Provider: "ollama" | "openai"
     LLM_PROVIDER: str = field(default_factory=lambda: os.getenv("LLM_PROVIDER", "ollama"))
-    LLM_MODEL: str = field(default_factory=lambda: os.getenv("LLM_MODEL", "phi3:mini"))
+    LLM_MODEL: str = field(default_factory=lambda: os.getenv("LLM_MODEL", "mistral:7b-instruct"))
 
     # Ollama
     OLLAMA_URL: str = field(default_factory=lambda: os.getenv("OLLAMA_URL", "http://127.0.0.1:11434"))

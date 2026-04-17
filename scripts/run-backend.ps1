@@ -1,4 +1,4 @@
-# scripts/run-backend.ps1
+﻿# scripts/run-backend.ps1
 $ErrorActionPreference = "Stop"
 Set-Location "$PSScriptRoot\.."
 
@@ -7,11 +7,11 @@ Write-Host "`n=== Cleaning up old processes ===" -ForegroundColor Cyan
 $oldPids = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue |
     Select-Object -ExpandProperty OwningProcess -Unique
 if ($oldPids) {
-    foreach ($pid in $oldPids) {
-        $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+    foreach ($p in $oldPids) {
+        $proc = Get-Process -Id $p -ErrorAction SilentlyContinue
         if ($proc) {
-            Write-Host "  Killing $($proc.ProcessName) (PID $pid) on port 8000" -ForegroundColor Yellow
-            Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+            Write-Host "  Killing $($proc.ProcessName) (PID $p) on port 8000" -ForegroundColor Yellow
+            Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
         }
     }
     Start-Sleep -Seconds 1
@@ -78,6 +78,18 @@ if ($ollamaReady) {
     Write-Host "  WARNING: Ollama API not responding. Backend may fail LLM calls." -ForegroundColor Yellow
 }
 
+# Verify the configured LLM model is pulled locally
+$llmModel = if ($env:LLM_MODEL) { $env:LLM_MODEL } else { "mistral:7b-instruct" }
+Write-Host "  Checking model '$llmModel'..." -ForegroundColor Gray
+$ollamaList = & ollama list 2>$null | Out-String
+if ($ollamaList -match [regex]::Escape($llmModel)) {
+    Write-Host "  Model '$llmModel' OK" -ForegroundColor Green
+} else {
+    Write-Host "  Model '$llmModel' not found locally. Pull it with:" -ForegroundColor Red
+    Write-Host "    ollama pull $llmModel" -ForegroundColor Yellow
+    exit 1
+}
+
 # ─── 4. Activate venv and set environment ─────────────────────────
 Write-Host "`n=== Starting backend ===" -ForegroundColor Cyan
 .\.venv\Scripts\Activate.ps1
@@ -86,7 +98,8 @@ Set-Location backend
 if (-not $env:DB_USER) { $env:DB_USER = "tfg_app" }
 if (-not $env:DB_PASSWORD) { $env:DB_PASSWORD = "tfg_pass_2024" }
 if (-not $env:LLM_PROVIDER) { $env:LLM_PROVIDER = "ollama" }
-if (-not $env:LLM_MODEL) { $env:LLM_MODEL = "phi3:mini" }
+if (-not $env:LLM_MODEL) { $env:LLM_MODEL = "mistral:7b-instruct" }
 if (-not $env:STT_DEVICE) { $env:STT_DEVICE = "cuda" }
+if (-not $env:SPEAKER_DEVICE) { $env:SPEAKER_DEVICE = "cpu" }
 
 python -m uvicorn src.server:app --host 0.0.0.0 --port 8000 --reload
