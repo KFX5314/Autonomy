@@ -8,6 +8,7 @@ The legacy phrase/timestamp/repetition filter is kept as a cheap safety net.
 """
 
 import logging
+import threading
 import time
 import tempfile
 import os
@@ -20,6 +21,13 @@ from ..config import config
 logger = logging.getLogger(__name__)
 
 _model: WhisperModel | None = None
+# Serializes access to the Whisper singleton. faster-whisper/CTranslate2 is
+# not safe against concurrent inference on the same model instance (CUDA
+# context + internal buffers are shared), so we gate every transcribe() call
+# behind this lock. Concurrency at the request level is still bounded by the
+# audio semaphore in routes/audio.py; this lock additionally serializes the
+# GPU/CPU work to avoid corrupted tensors if two worker threads collide.
+_model_lock = threading.Lock()
 
 
 def _compute_type() -> str:
@@ -138,26 +146,30 @@ def transcribe_audio(
     Each segment: {"start": float, "end": float, "text": str}
     """
     model = _get_model()
-    segments_iter, info = model.transcribe(
-        audio_path,
-        language=language,
-        task="transcribe",
-        vad_filter=True,
-        vad_parameters={"min_silence_duration_ms": config.STT_MIN_SILENCE_MS},
-        condition_on_previous_text=False,
-        no_speech_threshold=config.STT_NO_SPEECH_THRESHOLD,
-        log_prob_threshold=config.STT_LOG_PROB_THRESHOLD,
-        compression_ratio_threshold=config.STT_COMPRESSION_RATIO_THRESHOLD,
-        initial_prompt=config.STT_INITIAL_PROMPT or None,
-    )
+    # The transcribe() call returns a generator; the actual work happens while
+    # we iterate. Hold the lock for the full iteration so two threads can't
+    # interleave GPU kernels on the shared model.
+    with _model_lock:
+        segments_iter, info = model.transcribe(
+            audio_path,
+            language=language,
+            task="transcribe",
+            vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": config.STT_MIN_SILENCE_MS},
+            condition_on_previous_text=False,
+            no_speech_threshold=config.STT_NO_SPEECH_THRESHOLD,
+            log_prob_threshold=config.STT_LOG_PROB_THRESHOLD,
+            compression_ratio_threshold=config.STT_COMPRESSION_RATIO_THRESHOLD,
+            initial_prompt=config.STT_INITIAL_PROMPT or None,
+        )
 
-    segments = [
-        {"start": float(s.start), "end": float(s.end), "text": s.text.strip()}
-        for s in segments_iter
-        if s.text and s.text.strip()
-    ]
+        segments = [
+            {"start": float(s.start), "end": float(s.end), "text": s.text.strip()}
+            for s in segments_iter
+            if s.text and s.text.strip()
+        ]
 
-    detected_lang = getattr(info, "language", language) or language
+        detected_lang = getattr(info, "language", language) or language
 
     if _is_hallucination(segments, audio_duration):
         return {"text": "", "language": detected_lang, "segments": []}

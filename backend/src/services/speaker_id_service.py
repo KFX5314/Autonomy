@@ -13,6 +13,7 @@ sample once after migrating to this stack.
 import logging
 import subprocess
 import tempfile
+import threading
 import os
 
 import numpy as np
@@ -37,6 +38,12 @@ _MODEL_DIR = os.path.join(
 
 _encoder = None
 _device: str | None = None
+# Serializes access to the ECAPA-TDNN singleton. The underlying torch model
+# runs in eval mode so inference is mostly thread-safe, but the encoder
+# keeps internal buffers that we prefer not to have two threads touch at
+# once (e.g. the diarization loop from routes/audio.py overlapping with a
+# voice-sample upload from routes/patients.py).
+_encoder_lock = threading.Lock()
 
 
 def _get_device() -> str:
@@ -107,7 +114,7 @@ def _embed(wav: torch.Tensor) -> np.ndarray:
     if wav.dim() == 1:
         wav = wav.unsqueeze(0)  # (1, samples)
     wav = wav.to(device)
-    with torch.no_grad():
+    with _encoder_lock, torch.no_grad():
         emb = encoder.encode_batch(wav).squeeze().detach().cpu().numpy()
     norm = np.linalg.norm(emb)
     if norm > 0:

@@ -11,6 +11,19 @@ class OllamaProvider(LLMProvider):
     def __init__(self, base_url: str | None = None, model: str | None = None):
         self.base_url = (base_url or config.OLLAMA_URL).rstrip("/")
         self.model = model or config.LLM_MODEL
+        # Reuse a single AsyncClient across all generate() calls so we get
+        # HTTP/1.1 keep-alive and connection pooling instead of opening a
+        # fresh TCP connection for every LLM request. The generous timeout
+        # covers warm/cold model loads; short timeouts are used explicitly
+        # for the health_check / check_model requests below.
+        self._client = httpx.AsyncClient(
+            base_url=self.base_url,
+            timeout=120.0,
+            limits=httpx.Limits(max_connections=16, max_keepalive_connections=8),
+        )
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
 
     async def generate(self, system_prompt: str, user_message: str) -> str:
         payload = {
@@ -21,17 +34,15 @@ class OllamaProvider(LLMProvider):
                 {"role": "user", "content": user_message},
             ],
         }
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(f"{self.base_url}/api/chat", json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-            return data["message"]["content"]
+        resp = await self._client.post("/api/chat", json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+        return data["message"]["content"]
 
     async def health_check(self) -> bool:
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(f"{self.base_url}/api/tags")
-                return resp.status_code == 200
+            resp = await self._client.get("/api/tags", timeout=5.0)
+            return resp.status_code == 200
         except Exception:
             return False
 
@@ -40,13 +51,12 @@ class OllamaProvider(LLMProvider):
         import logging
         log = logging.getLogger(__name__)
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(f"{self.base_url}/api/tags")
-                resp.raise_for_status()
-                models = [m["name"] for m in resp.json().get("models", [])]
-                if any(self.model in m or m.startswith(self.model.split(":")[0]) for m in models):
-                    log.info(f"Ollama model '{self.model}' ✓")
-                    return
+            resp = await self._client.get("/api/tags", timeout=5.0)
+            resp.raise_for_status()
+            models = [m["name"] for m in resp.json().get("models", [])]
+            if any(self.model in m or m.startswith(self.model.split(":")[0]) for m in models):
+                log.info(f"Ollama model '{self.model}' ✓")
+                return
             log.error(
                 f"\n{'='*60}\n"
                 f"  Ollama model '{self.model}' NOT FOUND.\n"
