@@ -67,7 +67,11 @@ export default function PatientHomeScreen({ user, onLogout }) {
         if (result.transcript) {
           setStatus(`Escuchado: "${result.transcript.substring(0, 60)}..."`);
         }
-        if (result.episode && result.reply_text) {
+        if (result.mode === "assistant" && result.reply_text) {
+          setLastReply(result.reply_text);
+          Speech.speak(result.reply_text, { language: "es-ES", rate: 0.9 });
+          setStatus(`🗣 ${result.reply_text.substring(0, 80)}`);
+        } else if (result.episode && result.reply_text) {
           setLastReply(result.reply_text);
           Speech.speak(result.reply_text, { language: "es-ES", rate: 0.85 });
           setStatus("⚠️ Episodio detectado - Tu responsable ha sido avisado");
@@ -223,7 +227,11 @@ export default function PatientHomeScreen({ user, onLogout }) {
         if (result.transcript) {
           setStatus(`Escuchado: "${result.transcript.substring(0, 60)}..."`);
         }
-        if (result.episode && result.reply_text) {
+        if (result.mode === "assistant" && result.reply_text) {
+          setLastReply(result.reply_text);
+          Speech.speak(result.reply_text, { language: "es-ES", rate: 0.9 });
+          setStatus(`🗣 ${result.reply_text.substring(0, 80)}`);
+        } else if (result.episode && result.reply_text) {
           setLastReply(result.reply_text);
           Speech.speak(result.reply_text, { language: "es-ES", rate: 0.85 });
           setStatus("⚠️ Episodio detectado - Tu responsable ha sido avisado");

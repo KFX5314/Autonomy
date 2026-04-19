@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { Audio } from "expo-av";
 import { getPatientContext, updatePatientContext, uploadVoiceSample } from "../services/api";
+import PhraseListEditor from "../components/PhraseListEditor";
 
 export default function PatientContextScreen({ patient, onBack }) {
   const [context, setContext] = useState(null);
@@ -24,8 +25,8 @@ export default function PatientContextScreen({ patient, onBack }) {
   const [address, setAddress] = useState("");
   const [caregiverNames, setCaregiverNames] = useState("");
   const [medicalNotes, setMedicalNotes] = useState("");
-  const [triggerPhrases, setTriggerPhrases] = useState("");
-  const [riskRules, setRiskRules] = useState("");
+  const [alertPhrases, setAlertPhrases] = useState([]);      // [{text, severity, regex}]
+  const [wakeWords, setWakeWords] = useState([]);            // [{text}]
   const [recording, setRecording] = useState(null);
   const [voiceStatus, setVoiceStatus] = useState(null); // null | "recording" | "uploading" | "done"
   const [voiceProgress, setVoiceProgress] = useState(0); // 0-1
@@ -59,13 +60,45 @@ export default function PatientContextScreen({ patient, onBack }) {
       setCaregiverNames((profile.caregiver_names || []).join(", "));
       setMedicalNotes((profile.medical_notes || []).join("\n"));
 
-      // Format triggers: "frase|severidad" per line
-      const triggers = ctx.trigger_phrases || [];
-      setTriggerPhrases(triggers.map((t) => `${t.text}|${t.severity}`).join("\n"));
+      // Load unified alert_phrases (merging legacy trigger_phrases + risk_rules
+      // if the backend still has those).
+      let phrases = [];
+      if (Array.isArray(ctx.alert_phrases) && ctx.alert_phrases.length) {
+        phrases = ctx.alert_phrases.map((it) =>
+          typeof it === "string"
+            ? { text: it, severity: 3, regex: false }
+            : {
+                text: it.text || "",
+                severity: Number(it.severity) || 3,
+                regex: !!it.regex,
+              }
+        );
+      } else {
+        for (const t of ctx.trigger_phrases || []) {
+          if (typeof t === "string") phrases.push({ text: t, severity: 3, regex: false });
+          else if (t && t.text)
+            phrases.push({
+              text: t.text,
+              severity: Number(t.severity) || 3,
+              regex: !!t.regex,
+            });
+        }
+        for (const r of ctx.risk_rules || []) {
+          const pat = typeof r === "string" ? r : r.pattern || r.text;
+          if (pat)
+            phrases.push({
+              text: pat,
+              severity: Number(r.severity) || 4,
+              regex: r.regex !== undefined ? !!r.regex : true,
+            });
+        }
+      }
+      setAlertPhrases(phrases);
 
-      // Format rules: "patrón|riesgo" per line
-      const rules = ctx.risk_rules || [];
-      setRiskRules(rules.map((r) => `${r.pattern}|${r.risk}`).join("\n"));
+      const waw = (ctx.assistant_wake_words || []).map((w) =>
+        typeof w === "string" ? { text: w } : { text: w?.text || "" }
+      );
+      setWakeWords(waw);
     } catch (e) {
       Alert.alert("Error", e.message);
     } finally {
@@ -152,6 +185,18 @@ export default function PatientContextScreen({ patient, onBack }) {
 
   const handleSave = async () => {
     try {
+      const cleanedPhrases = alertPhrases
+        .map((p) => ({
+          text: (p.text || "").trim(),
+          severity: Math.max(1, Math.min(5, Number(p.severity) || 3)),
+          regex: !!p.regex,
+        }))
+        .filter((p) => p.text);
+
+      const cleanedWakeWords = wakeWords
+        .map((w) => (w.text || "").trim().toLowerCase())
+        .filter(Boolean);
+
       const newContext = {
         ...context,
         static_profile: {
@@ -160,24 +205,16 @@ export default function PatientContextScreen({ patient, onBack }) {
           caregiver_names: caregiverNames.split(",").map((s) => s.trim()).filter(Boolean),
           medical_notes: medicalNotes.split("\n").filter(Boolean),
         },
-        trigger_phrases: triggerPhrases
-          .split("\n")
-          .filter(Boolean)
-          .map((line) => {
-            const [text, sev] = line.split("|");
-            return { text: text.trim(), severity: parseInt(sev) || 3 };
-          }),
-        risk_rules: riskRules
-          .split("\n")
-          .filter(Boolean)
-          .map((line) => {
-            const [pattern, risk] = line.split("|");
-            return { pattern: pattern.trim(), risk: risk?.trim() || "", action: "alert_caregiver" };
-          }),
+        alert_phrases: cleanedPhrases,
+        assistant_wake_words: cleanedWakeWords,
       };
+      // Drop the legacy keys so the server stores the canonical shape.
+      delete newContext.trigger_phrases;
+      delete newContext.risk_rules;
 
       await updatePatientContext(patient.id, newContext);
       Alert.alert("Guardado", "Contexto actualizado correctamente.");
+      if (onBack) onBack();
     } catch (e) {
       Alert.alert("Error", e.message);
     }
@@ -217,24 +254,29 @@ export default function PatientContextScreen({ patient, onBack }) {
         numberOfLines={3}
       />
 
-      <Text style={styles.label}>Frases gatillo (frase|severidad, una por línea)</Text>
-      <Text style={styles.hint}>Ej: ayuda|5</Text>
-      <TextInput
-        style={[styles.input, styles.multiline]}
-        value={triggerPhrases}
-        onChangeText={setTriggerPhrases}
-        multiline
-        numberOfLines={4}
+      <Text style={styles.label}>Frases de alerta</Text>
+      <Text style={styles.hint}>
+        Cuando el paciente diga una de estas frases, se generará una alerta.
+        La severidad (1–5) prioriza la alerta. Activa "regex" para tratar el
+        texto como expresión regular.
+      </Text>
+      <PhraseListEditor
+        value={alertPhrases}
+        onChange={setAlertPhrases}
+        mode="alert"
+        addLabel="Añadir frase de alerta"
       />
 
-      <Text style={styles.label}>Reglas de riesgo (patrón regex|riesgo, una por línea)</Text>
-      <Text style={styles.hint}>Ej: autobús|bus|tendencia a desorientarse</Text>
-      <TextInput
-        style={[styles.input, styles.multiline]}
-        value={riskRules}
-        onChangeText={setRiskRules}
-        multiline
-        numberOfLines={4}
+      <Text style={styles.label}>Palabras de activación del asistente</Text>
+      <Text style={styles.hint}>
+        Cuando el paciente diga una de estas palabras (p. ej. "asistente",
+        "ayúdame"), el sistema responderá con voz en vez de generar alerta.
+      </Text>
+      <PhraseListEditor
+        value={wakeWords}
+        onChange={setWakeWords}
+        mode="wake"
+        addLabel="Añadir palabra de activación"
       />
 
       <Text style={styles.label}>Muestra de voz del paciente</Text>

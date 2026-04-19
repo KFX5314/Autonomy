@@ -88,25 +88,61 @@ def _build_profile_block(context: dict) -> str:
     return "\n".join(lines)
 
 
-def _build_analysis_prompt(context: dict, transcript: str, short_term_memory: str = "") -> str:
-    triggers = context.get("trigger_phrases", [])
-    rules = context.get("risk_rules", [])
+def _resolve_alert_phrases(context: dict) -> list[dict]:
+    """Return the unified alert phrase list.
 
-    trigger_lines = []
-    for t in triggers:
+    Prefers ``context["alert_phrases"]`` when present. Otherwise merges
+    legacy ``trigger_phrases`` (default severity 3, substring match) and
+    ``risk_rules`` (default severity 4, regex match) for backward compat.
+
+    Each item: {"text": str, "severity": int 1..5, "regex": bool}.
+    """
+    alert_phrases = context.get("alert_phrases")
+    if isinstance(alert_phrases, list) and alert_phrases:
+        out: list[dict] = []
+        for it in alert_phrases:
+            if isinstance(it, str):
+                out.append({"text": it, "severity": 3, "regex": False})
+            elif isinstance(it, dict) and it.get("text"):
+                out.append({
+                    "text": it["text"],
+                    "severity": int(it.get("severity", 3)),
+                    "regex": bool(it.get("regex", False)),
+                })
+        return out
+
+    merged: list[dict] = []
+    for t in context.get("trigger_phrases", []):
         if isinstance(t, str):
-            trigger_lines.append(f'- "{t}" (severidad 3)')
-        else:
-            trigger_lines.append(f'- "{t["text"]}" (severidad {t.get("severity", 3)})')
-    trigger_list = "\n".join(trigger_lines) or "- (ninguna)"
-
-    rule_lines = []
-    for r in rules:
+            merged.append({"text": t, "severity": 3, "regex": False})
+        elif isinstance(t, dict) and t.get("text"):
+            merged.append({
+                "text": t["text"],
+                "severity": int(t.get("severity", 3)),
+                "regex": bool(t.get("regex", False)),
+            })
+    for r in context.get("risk_rules", []):
         if isinstance(r, str):
-            rule_lines.append(f'- patrón: "{r}" → riesgo: medio')
-        else:
-            rule_lines.append(f'- patrón: "{r["pattern"]}" → riesgo: {r.get("risk", "desconocido")}')
-    rule_list = "\n".join(rule_lines) or "- (ninguna)"
+            merged.append({"text": r, "severity": 4, "regex": True})
+        elif isinstance(r, dict):
+            pat = r.get("pattern") or r.get("text")
+            if pat:
+                merged.append({
+                    "text": pat,
+                    "severity": int(r.get("severity", 4)),
+                    "regex": bool(r.get("regex", True)),
+                })
+    return merged
+
+
+def _build_analysis_prompt(context: dict, transcript: str, short_term_memory: str = "") -> str:
+    alert_phrases = _resolve_alert_phrases(context)
+
+    phrase_lines = []
+    for p in alert_phrases:
+        kind = "regex" if p["regex"] else "frase"
+        phrase_lines.append(f'- [{kind}] "{p["text"]}" (severidad {p["severity"]})')
+    phrase_list = "\n".join(phrase_lines) or "- (ninguna)"
 
     stm_section = ""
     if short_term_memory:
@@ -123,8 +159,7 @@ def _build_analysis_prompt(context: dict, transcript: str, short_term_memory: st
         f"pero NUNCA activan un episodio por sí solas.\n\n"
         f"--- Perfil del paciente ---\n"
         f"{_build_profile_block(context)}\n\n"
-        f"--- Frases gatillo conocidas ---\n{trigger_list}\n\n"
-        f"--- Reglas de riesgo ---\n{rule_list}\n"
+        f"--- Frases de alerta ---\n{phrase_list}\n"
         f"{stm_section}\n"
         f"--- Transcripción a evaluar ---\n\"{transcript}\"\n\n"
         f"Responde SOLO con un JSON válido con esta forma exacta:\n"
@@ -176,35 +211,28 @@ class EpisodeDetector:
         if not text_lower:
             return None
 
-        for trigger in self.context.get("trigger_phrases", []):
-            if isinstance(trigger, str):
-                phrase = trigger.lower()
-                severity = 3
-                display = trigger
+        for item in _resolve_alert_phrases(self.context):
+            pattern = item["text"].lower()
+            if not pattern:
+                continue
+            if item["regex"]:
+                try:
+                    if re.search(pattern, text_lower):
+                        return EpisodeResult(
+                            is_episode=True,
+                            severity=item["severity"],
+                            reason=f"Patrón de alerta (regex): {item['text']}",
+                        )
+                except re.error as e:
+                    logger.warning(f"Skipping invalid regex '{item['text']}': {e}")
+                    continue
             else:
-                phrase = trigger.get("text", "").lower()
-                severity = trigger.get("severity", 3)
-                display = trigger.get("text", phrase)
-            if phrase and phrase in text_lower:
-                return EpisodeResult(
-                    is_episode=True,
-                    severity=severity,
-                    reason=f'Frase gatillo detectada: "{display}"',
-                )
-
-        for rule in self.context.get("risk_rules", []):
-            if isinstance(rule, str):
-                pattern = rule
-                risk_label = rule
-            else:
-                pattern = rule.get("pattern", "")
-                risk_label = rule.get("risk", pattern)
-            if pattern and re.search(pattern, text_lower):
-                return EpisodeResult(
-                    is_episode=True,
-                    severity=4,
-                    reason=f"Regla de riesgo activada: {risk_label}",
-                )
+                if pattern in text_lower:
+                    return EpisodeResult(
+                        is_episode=True,
+                        severity=item["severity"],
+                        reason=f'Frase de alerta detectada: "{item["text"]}"',
+                    )
 
         return None
 

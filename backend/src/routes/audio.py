@@ -22,7 +22,7 @@ from ..models.alert import Alert
 from ..schemas.alert import AudioChunkResponse
 from ..auth import require_patient
 from ..services.stt_service import transcribe_audio
-from ..services.episode_detector import EpisodeDetector
+from ..services.episode_detector import EpisodeDetector, _extract_patient_text
 from ..services.speaker_id_service import diarize_segments, build_tagged_transcript
 from ..services.memory_service import (
     get_short_term,
@@ -180,7 +180,40 @@ async def process_audio_chunk(
 
                 stm = get_short_term(patient.id, db, exclude_transcript_id=transcript.id)
                 if stm:
-                    print(f"\033[96m  ðŸ§  STM: {stm.count(chr(10)) + 1} utterance(s), {len(stm)} chars\033[0m")
+                    print(f"\033[96m  🧠 STM: {stm.count(chr(10)) + 1} utterance(s), {len(stm)} chars\033[0m")
+
+                # 3a. Wake-word shortcut: if the patient says a configured
+                # wake word, skip the episode detector and answer the query.
+                wake_words = [w.lower() for w in context_data.get("assistant_wake_words", []) if isinstance(w, str) and w.strip()]
+                patient_only_text = _extract_patient_text(transcript_text).lower()
+                triggered_wake = next((w for w in wake_words if w and w in patient_only_text), None)
+
+                if triggered_wake:
+                    from ..services.assistant_service import answer_patient_query
+                    t_llm_start = time.time()
+                    assistant_out = await answer_patient_query(
+                        patient=patient,
+                        patient_text=patient_only_text,
+                        stm=stm,
+                        db=db,
+                    )
+                    t_llm_end = time.time()
+                    print(f"\033[94m  🗣  WAKE-WORD '{triggered_wake}' → assistant reply in {t_llm_end - t_llm_start:.2f}s\033[0m")
+                    db.commit()
+
+                    if should_schedule_journal(patient.id):
+                        background_tasks.add_task(summarize_and_append, patient.id)
+
+                    return AudioChunkResponse(
+                        transcript=transcript_text,
+                        episode=False,
+                        severity=0,
+                        reason="",
+                        reply_text=assistant_out.get("reply_text"),
+                        alert_id=None,
+                        mode="assistant",
+                        segments=[{"start": s["start"], "end": s["end"]} for s in segments],
+                    )
 
                 detector = EpisodeDetector(context_data)
                 t_llm_start = time.time()
@@ -240,6 +273,7 @@ async def process_audio_chunk(
                     reason=result.reason or "",
                     reply_text=result.llm_response,
                     alert_id=alert_id,
+                    mode="episode" if result.is_episode else "idle",
                     segments=[{"start": s["start"], "end": s["end"]} for s in segments],
                 )
         finally:
