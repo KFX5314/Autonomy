@@ -19,7 +19,7 @@ const MAX_CHUNK_MS         = 12000; // hard ceiling per chunk (faster-whisper is
 const POLL_INTERVAL_MS     = 250;   // how often to poll metering
 const SPEECH_CONFIRM_COUNT = 3;     // consecutive polls above threshold to confirm speech (reduces false starts)
 
-export default function PatientHomeScreen({ user, onLogout }) {
+export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
   const [listening, setListening] = useState(false);
   const [status, setStatus] = useState("Listo");
   const [lastReply, setLastReply] = useState(null);
@@ -317,8 +317,8 @@ export default function PatientHomeScreen({ user, onLogout }) {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.greeting}>Hola, {user.full_name}</Text>
-        <Pressable onPress={onLogout}>
-          <Text style={styles.logout}>Salir</Text>
+        <Pressable onPress={onOpenSettings} hitSlop={10} style={styles.gearBtn}>
+          <Text style={styles.gear}>⚙︎</Text>
         </Pressable>
       </View>
 
@@ -357,6 +357,8 @@ const styles = StyleSheet.create({
   },
   greeting: { fontSize: 22, fontWeight: "700" },
   logout: { color: "#E74C3C", fontSize: 16 },
+  gearBtn: { paddingHorizontal: 6, paddingVertical: 4 },
+  gear: { fontSize: 24, color: "#555" },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
   recordButton: {
     width: 180,

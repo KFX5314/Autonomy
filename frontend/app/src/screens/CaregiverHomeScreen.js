@@ -14,7 +14,7 @@ import {
 import { getPatients, getAlerts, ackAlert, getPatientJournal } from "../services/api";
 import AlertCard from "../components/AlertCard";
 
-export default function CaregiverHomeScreen({ user, onLogout, onEditContext }) {
+export default function CaregiverHomeScreen({ user, onLogout, onEditContext, onOpenSettings }) {
   const [patients, setPatients] = useState([]);
   const [alerts, setAlerts] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -90,8 +90,8 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext }) {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.greeting}>Hola, {user.full_name}</Text>
-        <Pressable onPress={onLogout}>
-          <Text style={styles.logout}>Salir</Text>
+        <Pressable onPress={onOpenSettings} hitSlop={10} style={styles.gearBtn}>
+          <Text style={styles.gear}>⚙︎</Text>
         </Pressable>
       </View>
 
@@ -218,6 +218,8 @@ const styles = StyleSheet.create({
   },
   greeting: { fontSize: 22, fontWeight: "700" },
   logout: { color: "#E74C3C", fontSize: 16 },
+  gearBtn: { paddingHorizontal: 6, paddingVertical: 4 },
+  gear: { fontSize: 24, color: "#555" },
   historyBtn: { flexDirection: "row", alignItems: "center", gap: 4 },
   historyIcon: { fontSize: 18 },
   historyLabel: { color: "#4A90D9", fontSize: 14, fontWeight: "600" },

@@ -11,6 +11,7 @@ import {
   ScrollView,
 } from "react-native";
 import { login, register, setToken } from "../services/api";
+import { saveSession } from "../services/session";
 
 export default function LoginScreen({ onLogin }) {
   const [isRegister, setIsRegister] = useState(false);
@@ -43,6 +44,7 @@ export default function LoginScreen({ onLogin }) {
         data = await login(email, password);
       }
       setToken(data.access_token);
+      await saveSession(data.access_token, data);
       onLogin(data);
     } catch (e) {
       Alert.alert("Error", e.message);
