@@ -12,12 +12,12 @@ import * as Speech from "expo-speech";
 import { sendAudioChunk } from "../services/api";
 
 /* ── VAD tuning knobs ─────────────────────────────────────── */
-const DEFAULT_THRESHOLD    = -50;   // initial dBFS threshold (before calibration)
-const SILENCE_DURATION_MS  = 1500;  // quiet after speech → send
+const DEFAULT_THRESHOLD    = -45;   // initial dBFS threshold (before calibration)
+const SILENCE_DURATION_MS  = 1800;  // quiet after speech → send (Spanish speakers pause mid-sentence)
 const MIN_CHUNK_MS         = 2000;  // never send before 2 s
-const MAX_CHUNK_MS         = 15000; // hard ceiling per chunk
+const MAX_CHUNK_MS         = 12000; // hard ceiling per chunk (faster-whisper is fast enough)
 const POLL_INTERVAL_MS     = 250;   // how often to poll metering
-const SPEECH_CONFIRM_COUNT = 2;     // consecutive polls above threshold to confirm speech
+const SPEECH_CONFIRM_COUNT = 3;     // consecutive polls above threshold to confirm speech (reduces false starts)
 
 export default function PatientHomeScreen({ user, onLogout }) {
   const [listening, setListening] = useState(false);
