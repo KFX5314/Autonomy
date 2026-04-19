@@ -143,8 +143,12 @@ def transcribe_audio(
         language=language,
         task="transcribe",
         vad_filter=True,
-        vad_parameters={"min_silence_duration_ms": 500},
+        vad_parameters={"min_silence_duration_ms": config.STT_MIN_SILENCE_MS},
         condition_on_previous_text=False,
+        no_speech_threshold=config.STT_NO_SPEECH_THRESHOLD,
+        log_prob_threshold=config.STT_LOG_PROB_THRESHOLD,
+        compression_ratio_threshold=config.STT_COMPRESSION_RATIO_THRESHOLD,
+        initial_prompt=config.STT_INITIAL_PROMPT or None,
     )
 
     segments = [
