@@ -9,7 +9,7 @@ import time
 import subprocess
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, UploadFile, File, HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -22,6 +22,11 @@ from ..auth import require_patient
 from ..services.stt_service import transcribe_audio
 from ..services.episode_detector import EpisodeDetector
 from ..services.speaker_id_service import diarize_segments, build_tagged_transcript
+from ..services.memory_service import (
+    get_short_term,
+    should_schedule_journal,
+    summarize_and_append,
+)
 from ..config import config
 
 import logging
@@ -32,6 +37,7 @@ router = APIRouter(prefix="/audio", tags=["audio"])
 
 @router.post("/chunk", response_model=AudioChunkResponse)
 async def process_audio_chunk(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     user: User = Depends(require_patient),
@@ -128,13 +134,17 @@ async def process_audio_chunk(
         db.add(transcript)
         db.flush()
 
-        # 3. Episode detection
+        # 3. Episode detection (with short-term memory injected for context)
         ctx = db.query(PatientContext).filter(PatientContext.patient_id == patient.id).first()
         context_data = ctx.context_json if ctx else {}
 
+        stm = get_short_term(patient.id, db, exclude_transcript_id=transcript.id)
+        if stm:
+            print(f"\033[96m  🧠 STM: {stm.count(chr(10)) + 1} utterance(s), {len(stm)} chars\033[0m")
+
         detector = EpisodeDetector(context_data)
         t_llm_start = time.time()
-        result = await detector.analyze(transcript_text)
+        result = await detector.analyze(transcript_text, short_term_memory=stm)
         t_llm_end = time.time()
         print(f"\033[96m  ⏱  LLM ({config.LLM_MODEL}): {t_llm_end - t_llm_start:.2f}s\033[0m")
 
@@ -164,6 +174,11 @@ async def process_audio_chunk(
             print(f"\033[92m  ✅ ALERTA: NO\033[0m")
         print(f"\033[96m  ⏱  TOTAL:          {time.time() - t0:.2f}s\033[0m")
         print(f"\033[96m{'═'*60}\033[0m\n")
+
+        # 4. Fire-and-forget: condense the STM buffer into a journal entry.
+        # Gated per-patient so it runs at most every JOURNAL_INTERVAL_MINUTES.
+        if should_schedule_journal(patient.id):
+            background_tasks.add_task(summarize_and_append, patient.id)
 
         return AudioChunkResponse(
             transcript=transcript_text,

@@ -1,16 +1,20 @@
-"""
+﻿"""
 Episode detection engine.
 
-Evaluates a transcript against the patient's context to decide whether
-an episode is occurring. Uses a two-stage approach:
-  1. Rule-based matching (fast, deterministic) - trigger phrases and regex patterns.
-  2. LLM-based analysis (optional, richer) - contextual understanding.
-
-If stage 1 finds a high-severity match, it can skip LLM for speed.
+Two-stage pipeline:
+  1. Rule-based matching (fast, deterministic) — trigger phrases and regex
+     patterns. Runs ONLY over [PACIENTE]-tagged text when diarization is
+     available, so caregivers speaking trigger words don't fire the alert.
+  2. LLM-based analysis — contextual reasoning. A single call produces the
+     classification AND (when it's an episode) the calming spoken reply,
+     avoiding a second round-trip.
 """
 
-import re
+from __future__ import annotations
+
+import json
 import logging
+import re
 from dataclasses import dataclass
 
 from .llm import get_llm_provider
@@ -26,7 +30,18 @@ class EpisodeResult:
     llm_response: str | None = None
 
 
-def _build_system_prompt(context: dict) -> str:
+_PACIENTE_LINE = re.compile(r"\[PACIENTE\]\s*(.+?)(?=\s*\[(?:PACIENTE|OTRO)\]|\s*$)", re.DOTALL)
+
+
+def _extract_patient_text(transcript: str) -> str:
+    if not transcript:
+        return ""
+    if "[PACIENTE]" not in transcript and "[OTRO]" not in transcript:
+        return transcript
+    return " ".join(m.group(1).strip() for m in _PACIENTE_LINE.finditer(transcript)).strip()
+
+
+def _build_reply_system_prompt(context: dict) -> str:
     profile = context.get("static_profile", {})
     name = profile.get("preferred_name", "el paciente")
     address = profile.get("current_address", "su domicilio")
@@ -50,11 +65,32 @@ def _build_system_prompt(context: dict) -> str:
     return prompt
 
 
-def _build_analysis_prompt(context: dict, transcript: str) -> str:
+def _build_profile_block(context: dict) -> str:
+    profile = context.get("static_profile", {})
+    name = profile.get("preferred_name", "el paciente")
+    address = profile.get("current_address", "su domicilio")
+    caregivers = ", ".join(profile.get("caregiver_names", [])) or "sin cuidadores registrados"
+    medical_notes = profile.get("medical_notes", [])
+    style = context.get("assistant_style", {})
+    tone = style.get("tone", "calmado")
+    max_words = style.get("max_words", 40)
+
+    lines = [
+        f"Paciente: {name}.",
+        f"Domicilio habitual: {address}.",
+        f"Cuidadores: {caregivers}.",
+    ]
+    if medical_notes:
+        lines.append("Notas médicas relevantes:")
+        for n in medical_notes:
+            lines.append(f"  - {n}")
+    lines.append(f"Estilo de respuesta si hay que hablarle: tono {tone}, máximo {max_words} palabras.")
+    return "\n".join(lines)
+
+
+def _build_analysis_prompt(context: dict, transcript: str, short_term_memory: str = "") -> str:
     triggers = context.get("trigger_phrases", [])
     rules = context.get("risk_rules", [])
-    profile = context.get("static_profile", {})
-    medical_notes = profile.get("medical_notes", [])
 
     trigger_lines = []
     for t in triggers:
@@ -62,7 +98,7 @@ def _build_analysis_prompt(context: dict, transcript: str) -> str:
             trigger_lines.append(f'- "{t}" (severidad 3)')
         else:
             trigger_lines.append(f'- "{t["text"]}" (severidad {t.get("severity", 3)})')
-    trigger_list = "\n".join(trigger_lines)
+    trigger_list = "\n".join(trigger_lines) or "- (ninguna)"
 
     rule_lines = []
     for r in rules:
@@ -70,29 +106,63 @@ def _build_analysis_prompt(context: dict, transcript: str) -> str:
             rule_lines.append(f'- patrón: "{r}" → riesgo: medio')
         else:
             rule_lines.append(f'- patrón: "{r["pattern"]}" → riesgo: {r.get("risk", "desconocido")}')
-    rule_list = "\n".join(rule_lines)
+    rule_list = "\n".join(rule_lines) or "- (ninguna)"
 
-    medical_section = ""
-    if medical_notes:
-        notes_str = "\n".join(f"- {n}" for n in medical_notes)
-        medical_section = (
-            f"\nNotas médicas del paciente (IMPORTANTE - detectar si la transcripción "
-            f"contradice o pone en peligro alguna de estas condiciones):\n{notes_str}\n"
+    stm_section = ""
+    if short_term_memory:
+        stm_section = (
+            "\nContexto reciente del paciente (últimos minutos, sólo frases del paciente):\n"
+            f"{short_term_memory}\n"
         )
 
     return (
         f"Analiza la siguiente transcripción y decide si el paciente está teniendo un episodio "
         f"de desorientación, necesita ayuda, o está diciendo algo peligroso según su historial médico.\n\n"
-        f"IMPORTANTE: La transcripción puede contener etiquetas [PACIENTE] y [OTRO]. "
-        f"Las frases del [PACIENTE] son las que debes analizar con más atención. "
-        f"Las frases de [OTRO] son de acompañantes y dan contexto pero no son del paciente.\n\n"
-        f"Frases gatillo conocidas:\n{trigger_list}\n\n"
-        f"Reglas de riesgo:\n{rule_list}\n"
-        f"{medical_section}\n"
-        f"Transcripción: \"{transcript}\"\n\n"
-        f"Responde SOLO con un JSON así: "
-        f'{{\"episode\": true/false, \"severity\": 0-5, \"reason\": \"explicación breve\"}}'
+        f"La transcripción puede contener etiquetas [PACIENTE] y [OTRO]. "
+        f"Sólo las frases de [PACIENTE] son del paciente; las de [OTRO] son de acompañantes y dan contexto "
+        f"pero NUNCA activan un episodio por sí solas.\n\n"
+        f"--- Perfil del paciente ---\n"
+        f"{_build_profile_block(context)}\n\n"
+        f"--- Frases gatillo conocidas ---\n{trigger_list}\n\n"
+        f"--- Reglas de riesgo ---\n{rule_list}\n"
+        f"{stm_section}\n"
+        f"--- Transcripción a evaluar ---\n\"{transcript}\"\n\n"
+        f"Responde SOLO con un JSON válido con esta forma exacta:\n"
+        f'{{"episode": true/false, "severity": 0-5, "reason": "explicación breve en español", '
+        f'"reply": "lo que le dirías al paciente si episode=true, o null en caso contrario"}}\n'
+        f"Si episode=false, \"reply\" debe ser null. Si episode=true, \"reply\" debe ser una frase corta, "
+        f"en el tono indicado, que orientará al paciente con calma."
     )
+
+
+def _parse_llm_json(raw: str) -> dict | None:
+    if not raw:
+        return None
+    json_match = re.search(r"\{.*\}", raw, re.DOTALL)
+    if not json_match:
+        return None
+    json_str = json_match.group()
+    json_str = re.sub(r",\s*}", "}", json_str)
+    json_str = re.sub(r",\s*]", "]", json_str)
+    json_str = re.sub(r"//.*$", "", json_str, flags=re.MULTILINE)
+    json_str = re.sub(r"(?<=[{\[,:\s])'", '"', json_str)
+    json_str = re.sub(r"'(?=[}\],:\s])", '"', json_str)
+    json_str = re.sub(r"(?<=[{,])\s*(\w+)\s*:", r' "\1":', json_str)
+    try:
+        return json.loads(json_str)
+    except json.JSONDecodeError:
+        ep_match = re.search(r'episode["\']?\s*:\s*(true|false)', raw, re.IGNORECASE)
+        sev_match = re.search(r'severity["\']?\s*:\s*(\d)', raw)
+        reason_match = re.search(r'reason["\']?\s*:\s*["\'](.+?)["\']', raw, re.DOTALL)
+        reply_match = re.search(r'reply["\']?\s*:\s*(?:null|"(.+?)")', raw, re.DOTALL | re.IGNORECASE)
+        if not any([ep_match, sev_match, reason_match]):
+            return None
+        return {
+            "episode": ep_match.group(1).lower() == "true" if ep_match else False,
+            "severity": int(sev_match.group(1)) if sev_match else 0,
+            "reason": reason_match.group(1) if reason_match else "Análisis LLM",
+            "reply": reply_match.group(1) if (reply_match and reply_match.group(1)) else None,
+        }
 
 
 class EpisodeDetector:
@@ -101,11 +171,11 @@ class EpisodeDetector:
     def __init__(self, context_json: dict):
         self.context = context_json
 
-    def _rule_based_check(self, transcript: str) -> EpisodeResult | None:
-        """Stage 1: fast regex/keyword matching."""
-        text_lower = transcript.lower().strip()
+    def _rule_based_check(self, patient_text: str) -> EpisodeResult | None:
+        text_lower = (patient_text or "").lower().strip()
+        if not text_lower:
+            return None
 
-        # Check trigger phrases (supports plain strings or {"text": ..., "severity": ...})
         for trigger in self.context.get("trigger_phrases", []):
             if isinstance(trigger, str):
                 phrase = trigger.lower()
@@ -122,7 +192,6 @@ class EpisodeDetector:
                     reason=f'Frase gatillo detectada: "{display}"',
                 )
 
-        # Check risk rules (supports plain strings or {"pattern": ..., "risk": ...})
         for rule in self.context.get("risk_rules", []):
             if isinstance(rule, str):
                 pattern = rule
@@ -139,89 +208,56 @@ class EpisodeDetector:
 
         return None
 
-    async def analyze(self, transcript: str, use_llm: bool = True) -> EpisodeResult:
-        """
-        Full analysis pipeline.
-        Returns EpisodeResult with detection decision and optional LLM response.
-        """
-        # Stage 1: rules
-        rule_result = self._rule_based_check(transcript)
+    async def analyze(
+        self,
+        transcript: str,
+        short_term_memory: str = "",
+        use_llm: bool = True,
+    ) -> EpisodeResult:
+        patient_text = _extract_patient_text(transcript)
+        rule_result = self._rule_based_check(patient_text)
 
-        if rule_result and rule_result.severity >= 4:
-            # High severity - generate calming response via LLM if available
+        if rule_result is not None:
             if use_llm:
                 try:
                     llm = get_llm_provider()
-                    system = _build_system_prompt(self.context)
+                    system = _build_reply_system_prompt(self.context)
                     response = await llm.generate(system, transcript)
                     rule_result.llm_response = response
                 except Exception as e:
-                    logger.warning(f"LLM generation failed, returning rule-only result: {e}")
+                    logger.warning(f"LLM reply generation failed, returning rule-only result: {e}")
             return rule_result
 
-        if rule_result:
-            # Lower severity rule match - still generate LLM response
-            if use_llm:
-                try:
-                    llm = get_llm_provider()
-                    system = _build_system_prompt(self.context)
-                    response = await llm.generate(system, transcript)
-                    rule_result.llm_response = response
-                except Exception as e:
-                    logger.warning(f"LLM generation failed: {e}")
-            return rule_result
+        if not use_llm:
+            return EpisodeResult(is_episode=False, severity=0, reason="Sin coincidencias")
 
-        # Stage 2: LLM-based analysis (no rule matched)
-        if use_llm:
-            try:
-                llm = get_llm_provider()
-                analysis_prompt = _build_analysis_prompt(self.context, transcript)
-                raw = await llm.generate(
-                    "Eres un sistema de detección de episodios de demencia. Responde SOLO en JSON válido.",
-                    analysis_prompt,
-                )
-                # Try to parse LLM JSON response
-                import json
-                # Find JSON in response
-                json_match = re.search(r'\{.*\}', raw, re.DOTALL)
-                if json_match:
-                    json_str = json_match.group()
-                    # Aggressive JSON repair for phi3 quirks
-                    json_str = re.sub(r',\s*}', '}', json_str)       # trailing commas
-                    json_str = re.sub(r',\s*]', ']', json_str)
-                    json_str = re.sub(r'//.*$', '', json_str, flags=re.MULTILINE)  # JS comments
-                    json_str = json_str.replace("'", '"')            # single → double quotes
-                    # Unquoted keys: word: → "word":
-                    json_str = re.sub(r'(?<=[{,])\s*(\w+)\s*:', r' "\1":', json_str)
-                    try:
-                        parsed = json.loads(json_str)
-                    except json.JSONDecodeError:
-                        # Last resort: extract booleans/numbers with regex
-                        ep_match = re.search(r'episode["\']?\s*:\s*(true|false)', raw, re.IGNORECASE)
-                        sev_match = re.search(r'severity["\']?\s*:\s*(\d)', raw)
-                        reason_match = re.search(r'reason["\']?\s*:\s*["\'](.+?)["\']', raw)
-                        parsed = {
-                            "episode": ep_match.group(1).lower() == "true" if ep_match else False,
-                            "severity": int(sev_match.group(1)) if sev_match else 0,
-                            "reason": reason_match.group(1) if reason_match else "Análisis LLM",
-                        }
-                    is_episode = bool(parsed.get("episode", False))
-                    severity = int(parsed.get("severity") or 0)
-                    reason = parsed.get("reason") or "Análisis LLM"
+        try:
+            llm = get_llm_provider()
+            analysis_prompt = _build_analysis_prompt(self.context, transcript, short_term_memory)
+            raw = await llm.generate(
+                "Eres un sistema de detección de episodios de demencia. Responde SOLO con JSON válido.",
+                analysis_prompt,
+            )
+            parsed = _parse_llm_json(raw)
+            if parsed is None:
+                logger.warning("LLM returned unparseable response; treating as no-episode.")
+                return EpisodeResult(is_episode=False, severity=0, reason="Respuesta LLM inválida")
 
-                    llm_response = None
-                    if is_episode:
-                        system = _build_system_prompt(self.context)
-                        llm_response = await llm.generate(system, transcript)
+            is_episode = bool(parsed.get("episode", False))
+            severity = int(parsed.get("severity") or 0)
+            reason = (parsed.get("reason") or "Análisis LLM").strip()
+            reply = parsed.get("reply")
+            if isinstance(reply, str):
+                reply = reply.strip() or None
+            else:
+                reply = None
 
-                    return EpisodeResult(
-                        is_episode=is_episode,
-                        severity=severity,
-                        reason=reason,
-                        llm_response=llm_response,
-                    )
-            except Exception as e:
-                logger.warning(f"LLM analysis failed: {e}")
-
-        # No episode detected
-        return EpisodeResult(is_episode=False, severity=0, reason="Sin coincidencias")
+            return EpisodeResult(
+                is_episode=is_episode,
+                severity=severity,
+                reason=reason,
+                llm_response=reply if is_episode else None,
+            )
+        except Exception as e:
+            logger.warning(f"LLM analysis failed: {e}")
+            return EpisodeResult(is_episode=False, severity=0, reason="Análisis no disponible")

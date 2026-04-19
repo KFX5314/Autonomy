@@ -41,6 +41,18 @@ class Config:
     OPENAI_API_KEY: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
     OPENAI_BASE_URL: str = field(default_factory=lambda: os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"))
 
+    # Memory layer
+    # Short-term: rolling window of recent patient utterances injected into the
+    # analysis prompt. Long-term: LLM-condensed journal persisted to the DB and
+    # exposed to caregivers. Summarization runs in a BackgroundTask so it never
+    # adds latency to the audio-chunk response.
+    STM_WINDOW_MINUTES: int = field(default_factory=lambda: int(os.getenv("STM_WINDOW_MINUTES", "5")))
+    STM_MAX_UTTERANCES: int = field(default_factory=lambda: int(os.getenv("STM_MAX_UTTERANCES", "12")))
+    STM_MAX_CHARS: int = field(default_factory=lambda: int(os.getenv("STM_MAX_CHARS", "1500")))
+    JOURNAL_INTERVAL_MINUTES: int = field(default_factory=lambda: int(os.getenv("JOURNAL_INTERVAL_MINUTES", "5")))
+    JOURNAL_RETENTION_HOURS: int = field(default_factory=lambda: int(os.getenv("JOURNAL_RETENTION_HOURS", "24")))
+    JOURNAL_MAX_ENTRIES: int = field(default_factory=lambda: int(os.getenv("JOURNAL_MAX_ENTRIES", "200")))
+
     @property
     def database_url(self) -> str:
         return (
