@@ -11,7 +11,9 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models.user import User
 from ..models.patient import Patient, PatientContext
+from ..models.journal import JournalEntry
 from ..schemas.patient import PatientOut, PatientContextUpdate, PatientContextOut
+from ..schemas.journal import JournalEntryOut
 from ..auth import require_caregiver
 from ..services.speaker_id_service import create_embedding
 
@@ -115,3 +117,37 @@ def upload_voice_sample(
         return {"status": "ok", "message": "Voice sample enrolled", "embedding_size": len(embedding)}
     finally:
         os.unlink(tmp_path)
+
+
+@router.get("/{patient_id}/journal", response_model=list[JournalEntryOut])
+def get_journal(
+    patient_id: int,
+    since_hours: int = 24,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_caregiver),
+):
+    """Caregiver-only: read the patient's recent journal entries (LTM)."""
+    from datetime import datetime, timedelta, timezone
+
+    patient = db.query(Patient).filter(Patient.id == patient_id).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    patient_user = db.query(User).filter(User.id == patient.user_id).first()
+    if not patient_user or patient_user.caregiver_id != user.id:
+        raise HTTPException(status_code=403, detail="Not your patient")
+
+    since_hours = max(1, min(since_hours, 168))  # 1 h .. 1 week
+    limit = max(1, min(limit, 500))
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=since_hours)).replace(tzinfo=None)
+
+    rows = (
+        db.query(JournalEntry)
+        .filter(JournalEntry.patient_id == patient_id)
+        .filter(JournalEntry.created_at >= cutoff)
+        .order_by(JournalEntry.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return rows

@@ -76,6 +76,11 @@ export async function updatePatientContext(patientId, contextJson) {
   });
 }
 
+// ─── Journal (caregiver) ─────────────────────────────
+export async function getPatientJournal(patientId, sinceHours = 24, limit = 100) {
+  return request(`/patients/${patientId}/journal?since_hours=${sinceHours}&limit=${limit}`);
+}
+
 // ─── Alerts (caregiver) ──────────────────────────────
 export async function getAlerts(patientId, status) {
   let path = "/alerts/";

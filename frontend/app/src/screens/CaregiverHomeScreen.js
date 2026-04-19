@@ -11,7 +11,7 @@ import {
   Alert,
   RefreshControl,
 } from "react-native";
-import { getPatients, getAlerts, ackAlert } from "../services/api";
+import { getPatients, getAlerts, ackAlert, getPatientJournal } from "../services/api";
 
 export default function CaregiverHomeScreen({ user, onLogout, onEditContext }) {
   const [patients, setPatients] = useState([]);
@@ -19,6 +19,9 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext }) {
   const [refreshing, setRefreshing] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [journalFor, setJournalFor] = useState(null); // {id, name} or null
+  const [journalEntries, setJournalEntries] = useState([]);
+  const [journalLoading, setJournalLoading] = useState(false);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -47,6 +50,32 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext }) {
       Alert.alert("Error", e.message);
     }
   };
+
+  const openJournal = useCallback(async (patient) => {
+    setJournalFor({ id: patient.id, name: patient.full_name });
+    setJournalLoading(true);
+    try {
+      const entries = await getPatientJournal(patient.id, 24, 100);
+      setJournalEntries(entries);
+    } catch (e) {
+      Alert.alert("Error", e.message);
+    } finally {
+      setJournalLoading(false);
+    }
+  }, []);
+
+  const refreshJournal = useCallback(async () => {
+    if (!journalFor) return;
+    setJournalLoading(true);
+    try {
+      const entries = await getPatientJournal(journalFor.id, 24, 100);
+      setJournalEntries(entries);
+    } catch (e) {
+      Alert.alert("Error", e.message);
+    } finally {
+      setJournalLoading(false);
+    }
+  }, [journalFor]);
 
   const patientName = (patientId) => {
     const p = patients.find((p) => p.id === patientId);
@@ -77,18 +106,47 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext }) {
           showsHorizontalScrollIndicator={false}
           style={styles.patientList}
           renderItem={({ item }) => (
-            <Pressable
-              style={styles.patientCard}
-              onPress={() => onEditContext(item)}
-            >
+            <View style={styles.patientCard}>
               <Text style={styles.patientName}>{item.full_name}</Text>
-              <Text style={styles.patientSub}>Editar contexto →</Text>
-            </Pressable>
+              <Pressable onPress={() => onEditContext(item)}>
+                <Text style={styles.patientSub}>Editar contexto →</Text>
+              </Pressable>
+              <Pressable onPress={() => openJournal(item)}>
+                <Text style={styles.patientSub}>Ver diario →</Text>
+              </Pressable>
+            </View>
           )}
         />
       )}
 
-      {showHistory ? (
+      {journalFor ? (
+        <>
+          <View style={styles.sectionRow}>
+            <Text style={styles.sectionTitle}>Diario — {journalFor.name}</Text>
+            <Pressable style={styles.historyBtn} onPress={() => { setJournalFor(null); setJournalEntries([]); }}>
+              <Text style={styles.historyIcon}>✕</Text>
+              <Text style={styles.historyLabel}>Cerrar</Text>
+            </Pressable>
+          </View>
+          <FlatList
+            data={journalEntries}
+            keyExtractor={(item) => String(item.id)}
+            refreshControl={<RefreshControl refreshing={journalLoading} onRefresh={refreshJournal} />}
+            style={styles.alertList}
+            ListEmptyComponent={
+              journalLoading ? null : <Text style={styles.empty}>Sin entradas aún. El asistente escribirá una cada pocos minutos.</Text>
+            }
+            renderItem={({ item }) => (
+              <View style={styles.alertCard}>
+                <Text style={styles.alertTime}>
+                  {new Date(item.created_at).toLocaleString("es-ES")}
+                </Text>
+                <Text style={styles.alertReason}>{item.summary_text}</Text>
+              </View>
+            )}
+          />
+        </>
+      ) : showHistory ? (
         <>
           <View style={styles.sectionRow}>
             <Text style={styles.sectionTitle}>Historial de alertas</Text>

@@ -17,6 +17,7 @@ class Patient(Base):
     context = relationship("PatientContext", uselist=False, back_populates="patient")
     transcripts = relationship("Transcript", back_populates="patient")
     alerts = relationship("Alert", back_populates="patient")
+    journal_entries = relationship("JournalEntry", back_populates="patient")
 
 
 class PatientContext(Base):

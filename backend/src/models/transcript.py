@@ -1,4 +1,4 @@
-from sqlalchemy import Column, BigInteger, DateTime, String, Text, TIMESTAMP, ForeignKey, func
+from sqlalchemy import Column, BigInteger, DateTime, String, Text, TIMESTAMP, ForeignKey, Index, func
 from sqlalchemy.orm import relationship
 from ..database import Base
 
@@ -17,3 +17,8 @@ class Transcript(Base):
 
     patient = relationship("Patient", back_populates="transcripts")
     alert = relationship("Alert", uselist=False, back_populates="transcript")
+
+    __table_args__ = (
+        # Short-term memory queries filter by patient + recent started_at
+        Index("ix_transcript_patient_started", "patient_id", "started_at"),
+    )
