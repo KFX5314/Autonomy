@@ -11,7 +11,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .config import config, DEV_JWT_SECRET, DEV_DB_PASSWORD
 from .database import engine, Base
+from .middleware.size_limit import BodySizeLimitMiddleware
 from .routes import auth_router, patients_router, audio_router, alerts_router
 from .services.llm import get_llm_provider
 from .services.llm.ollama_provider import OllamaProvider
@@ -20,8 +22,41 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def _enforce_production_safety() -> None:
+    """Fail loudly if we're starting in PRODUCTION mode with insecure defaults.
+
+    Caught here (not at import time) so dev boots keep working.
+    """
+    if not config.PRODUCTION:
+        if config.JWT_SECRET == DEV_JWT_SECRET:
+            logger.warning(
+                "⚠  JWT_SECRET is the dev default. DO NOT deploy like this. "
+                "Set JWT_SECRET to a 32+ byte random value before production."
+            )
+        return
+
+    problems: list[str] = []
+    if not config.JWT_SECRET or config.JWT_SECRET == DEV_JWT_SECRET:
+        problems.append("JWT_SECRET is unset or still the dev placeholder")
+    if len(config.JWT_SECRET) < 32:
+        problems.append("JWT_SECRET is shorter than 32 characters")
+    if config.DB_PASSWORD == DEV_DB_PASSWORD:
+        problems.append("DB_PASSWORD is still the dev default")
+    if any(o.strip() == "*" for o in config.CORS_ORIGINS):
+        problems.append("CORS_ORIGINS contains '*' (wildcard is unsafe with credentials)")
+    if not config.CORS_ORIGINS:
+        problems.append("CORS_ORIGINS is empty")
+
+    if problems:
+        msg = "Refusing to start with insecure production configuration:\n  - " + "\n  - ".join(problems)
+        raise RuntimeError(msg)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Startup: verify production configuration safety
+    _enforce_production_safety()
+
     # Startup: create tables if they don't exist (dev convenience)
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables verified/created.")
@@ -61,14 +96,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS - allow the Expo dev client
+# CORS — allowlist from config (env CORS_ORIGINS, comma-separated).
+# A wildcard "*" combined with credentials is rejected at startup.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=config.CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+
+# Reject oversized request bodies before they hit the handlers.
+app.add_middleware(BodySizeLimitMiddleware)
 
 # Register routers
 app.include_router(auth_router)

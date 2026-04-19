@@ -96,6 +96,16 @@ def upload_voice_sample(
     user: User = Depends(require_caregiver),
 ):
     """Upload a voice sample (.wav) to enroll the patient's voice."""
+    # Mime-type allowlist (avoid parsing arbitrary binary blobs with ffprobe/torchaudio).
+    _ALLOWED = {
+        "audio/mp4", "audio/m4a", "audio/x-m4a", "audio/aac",
+        "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav",
+        "audio/wave", "audio/webm", "audio/ogg", "audio/3gpp",
+    }
+    ct = (file.content_type or "").lower().split(";")[0].strip()
+    if ct and ct not in _ALLOWED:
+        raise HTTPException(status_code=415, detail=f"Unsupported audio type: {ct}")
+
     patient = db.query(Patient).filter(Patient.id == patient_id).first()
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")

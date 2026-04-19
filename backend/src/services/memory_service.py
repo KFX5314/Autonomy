@@ -199,6 +199,31 @@ async def summarize_and_append(patient_id: int) -> None:
             for o in oldest:
                 db.delete(o)
 
+        # Transcript retention: time-based + hard row cap per patient.
+        # Cheap because it piggybacks on this already-scheduled task.
+        tx_cutoff = now - timedelta(days=config.TRANSCRIPT_RETENTION_DAYS)
+        db.execute(
+            delete(Transcript)
+            .where(Transcript.patient_id == patient_id)
+            .where(Transcript.created_at < tx_cutoff.replace(tzinfo=None))
+        )
+        tx_total = (
+            db.query(Transcript)
+            .filter(Transcript.patient_id == patient_id)
+            .count()
+        )
+        if tx_total > config.TRANSCRIPT_MAX_ROWS:
+            tx_excess = tx_total - config.TRANSCRIPT_MAX_ROWS
+            tx_oldest = (
+                db.query(Transcript)
+                .filter(Transcript.patient_id == patient_id)
+                .order_by(Transcript.created_at.asc())
+                .limit(tx_excess)
+                .all()
+            )
+            for t in tx_oldest:
+                db.delete(t)
+
         db.commit()
         logger.info(f"[journal] patient={patient_id}: stored entry '{summary[:80]}...'")
     except Exception as e:
