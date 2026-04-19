@@ -12,6 +12,7 @@ import {
   RefreshControl,
 } from "react-native";
 import { getPatients, getAlerts, ackAlert, getPatientJournal } from "../services/api";
+import AlertCard from "../components/AlertCard";
 
 export default function CaregiverHomeScreen({ user, onLogout, onEditContext }) {
   const [patients, setPatients] = useState([]);
@@ -164,19 +165,11 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext }) {
               loaded ? <Text style={styles.empty}>Sin alertas pasadas.</Text> : null
             }
             renderItem={({ item }) => (
-              <View style={styles.alertCard}>
-                <View style={styles.alertHeader}>
-                  <Text style={styles.alertPatient}>{patientName(item.patient_id)}</Text>
-                  <Text style={styles.alertSeverity}>Sev: {item.severity}/5</Text>
-                </View>
-                <Text style={styles.alertReason}>{item.reason}</Text>
-                {item.llm_response && (
-                  <Text style={styles.alertLlm}>Respuesta IA: {item.llm_response}</Text>
-                )}
-                <Text style={styles.alertTime}>
-                  {new Date(item.created_at).toLocaleString("es-ES")}
-                </Text>
-              </View>
+              <AlertCard
+                alert={item}
+                patientName={patientName(item.patient_id)}
+                isNew={false}
+              />
             )}
           />
         </>
@@ -200,24 +193,12 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext }) {
               loaded ? <Text style={styles.empty}>Sin alertas nuevas.</Text> : null
             }
             renderItem={({ item }) => (
-              <View style={[styles.alertCard, styles.alertNew]}>
-                <View style={styles.alertHeader}>
-                  <Text style={styles.alertPatient}>{patientName(item.patient_id)}</Text>
-                  <Text style={styles.alertSeverity}>Sev: {item.severity}/5</Text>
-                </View>
-                <Text style={styles.alertReason}>{item.reason}</Text>
-                {item.llm_response && (
-                  <Text style={styles.alertLlm}>Respuesta IA: {item.llm_response}</Text>
-                )}
-                <View style={styles.alertFooter}>
-                  <Text style={styles.alertTime}>
-                    {new Date(item.created_at).toLocaleString("es-ES")}
-                  </Text>
-                  <Pressable style={styles.ackBtn} onPress={() => handleAck(item.id)}>
-                    <Text style={styles.ackText}>✓ Aceptar</Text>
-                  </Pressable>
-                </View>
-              </View>
+              <AlertCard
+                alert={item}
+                patientName={patientName(item.patient_id)}
+                isNew={true}
+                onAck={handleAck}
+              />
             )}
           />
         </>

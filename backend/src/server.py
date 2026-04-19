@@ -52,6 +52,29 @@ def _enforce_production_safety() -> None:
         raise RuntimeError(msg)
 
 
+def _migrate_alert_audio_columns() -> None:
+    """Add new alert columns on pre-existing DBs. No-op if columns already exist."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        cols = {c["name"] for c in insp.get_columns("alerts")}
+    except Exception:
+        return
+    stmts: list[str] = []
+    if "audio_path" not in cols:
+        stmts.append("ALTER TABLE alerts ADD COLUMN audio_path VARCHAR(512) NULL")
+    if "acknowledged_at" not in cols:
+        stmts.append("ALTER TABLE alerts ADD COLUMN acknowledged_at TIMESTAMP NULL")
+    if stmts:
+        with engine.begin() as conn:
+            for s in stmts:
+                try:
+                    conn.execute(text(s))
+                    logger.info(f"Migration: {s}")
+                except Exception as e:
+                    logger.warning(f"Migration failed ({s}): {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: verify production configuration safety
@@ -59,7 +82,12 @@ async def lifespan(app: FastAPI):
 
     # Startup: create tables if they don't exist (dev convenience)
     Base.metadata.create_all(bind=engine)
+    _migrate_alert_audio_columns()
     logger.info("Database tables verified/created.")
+
+    # Sweep expired alert audio from a previous run.
+    from .routes.alerts import sweep_expired_alert_audio
+    sweep_expired_alert_audio()
 
     # Pre-load all heavy models so first request is fast
     logger.info("Warming up models...")

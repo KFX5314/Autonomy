@@ -98,6 +98,16 @@ export async function ackAlert(alertId, status = "ACK") {
   });
 }
 
+// Full URL for the alert audio endpoint. Caller must pass the token as a
+// header (Audio.Sound on expo-av accepts headers via the second argument).
+export function getAlertAudioUrl(alertId) {
+  return `${BASE_URL}/alerts/${alertId}/audio`;
+}
+
+export function getAuthHeader() {
+  return _token ? { Authorization: `Bearer ${_token}` } : {};
+}
+
 // ─── Audio (patient) ─────────────────────────────────
 export async function sendAudioChunk(uri) {
   const form = new FormData();

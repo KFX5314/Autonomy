@@ -9,7 +9,10 @@ class AlertOut(BaseModel):
     reason: str
     llm_response: str | None = None
     status: str
+    transcript_text: str | None = None
+    audio_url: str | None = None
     created_at: datetime | None = None
+    acknowledged_at: datetime | None = None
 
     class Config:
         from_attributes = True
@@ -26,4 +29,6 @@ class AudioChunkResponse(BaseModel):
     reason: str = ""
     reply_text: str | None = None
     alert_id: int | None = None
+    # "idle" (no action), "episode" (alert fired), "assistant" (wake-word QA).
+    mode: str = "idle"
     segments: list[dict] = []    # [{"start": float, "end": float}] for VAD calibration

@@ -6,6 +6,7 @@ runs STT + episode detection, returns result.
 import asyncio
 import tempfile
 import os
+import shutil
 import time
 import subprocess
 from datetime import datetime, timezone
@@ -201,6 +202,19 @@ async def process_audio_chunk(
                     db.flush()
                     alert_id = alert.id
 
+                    # Archive the audio so the caregiver can replay the episode.
+                    # On failure we swallow: the alert is still useful without audio.
+                    try:
+                        patient_dir = os.path.join(config.ALERTS_AUDIO_DIR, str(patient.id))
+                        os.makedirs(patient_dir, exist_ok=True)
+                        ext = os.path.splitext(tmp_path)[1] or ".wav"
+                        archive_path = os.path.join(patient_dir, f"{alert_id}{ext}")
+                        shutil.move(tmp_path, archive_path)
+                        alert.audio_path = archive_path
+                        tmp_path = None  # signal finally block not to unlink
+                    except Exception as e:
+                        logger.warning(f"Could not archive alert audio: {e}")
+
                 db.commit()
 
                 # --- Debug: show result ---
@@ -229,4 +243,8 @@ async def process_audio_chunk(
                     segments=[{"start": s["start"], "end": s["end"]} for s in segments],
                 )
         finally:
-            os.unlink(tmp_path)
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
