@@ -32,6 +32,15 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
   /* ── start a metering-enabled recording ─────────────────── */
   const startRecording = async () => {
     try {
+      // Clean up any stale recording that wasn't properly released
+      // (can happen on re-login, app resume, or abort race conditions).
+      if (recordingRef.current) {
+        try {
+          await recordingRef.current.stopAndUnloadAsync();
+        } catch (_) {}
+        recordingRef.current = null;
+      }
+
       const perm = await Audio.requestPermissionsAsync();
       if (!perm.granted) {
         Alert.alert("Permiso necesario", "Se necesita acceso al micrófono.");
@@ -47,7 +56,7 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
       );
       recordingRef.current = recording;
     } catch (e) {
-      console.error("Error starting recording:", e);
+      console.warn("[REC] Error starting recording:", e.message);
     }
   };
 
@@ -78,7 +87,12 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
         }
       }
     } catch (e) {
-      console.error("Error processing chunk:", e);
+      if (e.message === "Network request failed" || e.name === "AbortError") {
+        console.warn("[SEND] Chunk send failed (network):", e.message);
+        setStatus("Sin conexion - reintentando...");
+      } else {
+        console.error("Error processing chunk:", e);
+      }
     }
   };
 
@@ -204,7 +218,7 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
         }
 
         if (elapsed >= MAX_CHUNK_MS) {
-          done(peakDb > thr ? "timeout" : "quiet");
+          done(speechDetected ? "timeout" : "quiet");
         }
       }, POLL_INTERVAL_MS);
 
@@ -239,7 +253,12 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
           setStatus("Escuchando...");
         }
       } catch (e) {
-        console.error("Error processing chunk:", e);
+        if (e.message === "Network request failed" || e.name === "AbortError") {
+          console.warn("[SEND] Chunk send failed (network):", e.message);
+          setStatus("Sin conexion - reintentando...");
+        } else {
+          console.error("Error processing chunk:", e);
+        }
       } finally {
         sendingRef.current = false;
       }
@@ -310,6 +329,8 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
     return () => {
       subscription.remove();
       abortRef.current?.abort();
+      // Release the recording singleton on unmount (e.g. re-login)
+      discardRecording();
     };
   }, []);
 

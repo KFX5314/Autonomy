@@ -7,6 +7,7 @@ The patient asks a question, the LLM answers grounded in:
   - the patient profile (name, address, caregivers, medical notes)
   - the last 24h journal (top 10 condensed entries)
   - the short-term memory buffer
+  - the full transcript of the current audio chunk (for immediate context)
 
 The answer is spoken back by the patient app via expo-speech. This is NOT
 the alert/episode path: no Alert row is persisted here.
@@ -39,11 +40,18 @@ def _build_system_prompt(context: dict) -> str:
         f"Responde SIEMPRE en español (es-ES), frases cortas, tono {tone}, "
         f"máximo {max_words} palabras. "
         "No inventes datos. Si no sabes algo, di que no lo sabes. "
-        "No des consejos médicos: para cuestiones de salud, di que avisarás al cuidador."
+        "No des consejos médicos: para cuestiones de salud, di que avisarás al cuidador. "
+        "Responde directamente a la pregunta o petición del paciente."
     )
 
 
-def _build_user_prompt(context: dict, patient_text: str, journal_entries: list[JournalEntry], stm: str) -> str:
+def _build_user_prompt(
+    context: dict,
+    patient_text: str,
+    journal_entries: list[JournalEntry],
+    stm: str,
+    full_transcript: str = "",
+) -> str:
     profile = context.get("static_profile", {})
     name = profile.get("preferred_name", "el paciente")
     address = profile.get("current_address", "su domicilio")
@@ -70,11 +78,23 @@ def _build_user_prompt(context: dict, patient_text: str, journal_entries: list[J
 
     if stm:
         lines.append("")
-        lines.append("Últimas frases del paciente:")
+        lines.append("Últimas frases del paciente (memoria reciente):")
         lines.append(stm)
 
+    if full_transcript:
+        lines.append("")
+        lines.append("Transcripción completa del audio actual (incluye a todas las personas presentes):")
+        lines.append(full_transcript)
+
     lines.append("")
-    lines.append(f'Pregunta del paciente: "{patient_text}"')
+    if patient_text:
+        lines.append(f'Pregunta/petición del paciente: "{patient_text}"')
+    else:
+        lines.append(
+            "El paciente ha llamado al asistente. Usa la memoria reciente y "
+            "el contexto de la conversación para inferir qué necesita y "
+            "respóndele directamente."
+        )
     lines.append("Responde directamente al paciente, sin preámbulos.")
     return "\n".join(lines)
 
@@ -84,6 +104,7 @@ async def answer_patient_query(
     patient_text: str,
     stm: str,
     db: Session,
+    full_transcript: str = "",
 ) -> dict:
     """Generate a short spoken answer for the patient.
 
@@ -109,7 +130,10 @@ async def answer_patient_query(
     recent_entries = list(reversed(recent_entries))
 
     system = _build_system_prompt(context_data)
-    user_prompt = _build_user_prompt(context_data, patient_text, recent_entries, stm)
+    user_prompt = _build_user_prompt(
+        context_data, patient_text, recent_entries, stm,
+        full_transcript=full_transcript,
+    )
 
     try:
         llm = get_llm_provider()

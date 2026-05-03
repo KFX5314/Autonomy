@@ -7,6 +7,10 @@ const BASE_URL = process.env.EXPO_PUBLIC_SERVER_URL || "http://100.64.0.1:8000";
 
 let _token = null;
 
+// Audio chunk upload settings
+const AUDIO_CHUNK_TIMEOUT_MS = 30000; // 30s timeout for audio processing
+const AUDIO_CHUNK_MAX_RETRIES = 1;    // retry once on transient failure
+
 export function setToken(token) {
   _token = token;
 }
@@ -109,7 +113,8 @@ export function getAuthHeader() {
 }
 
 // ─── Audio (patient) ─────────────────────────────────
-export async function sendAudioChunk(uri) {
+
+async function _sendAudioChunkOnce(uri) {
   const form = new FormData();
   form.append("file", {
     uri,
@@ -121,16 +126,41 @@ export async function sendAudioChunk(uri) {
   if (_token) {
     headers["Authorization"] = `Bearer ${_token}`;
   }
-  // Do NOT set Content-Type manually — fetch auto-generates the boundary for FormData
-  const res = await fetch(`${BASE_URL}/audio/chunk`, {
-    method: "POST",
-    body: form,
-    headers,
-  });
 
-  const text = await res.text();
-  if (!res.ok) throw new Error(text);
-  return JSON.parse(text);
+  // Abort the request if it takes too long (backend processing can be slow
+  // on first call, but >30s is almost certainly a dead connection).
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), AUDIO_CHUNK_TIMEOUT_MS);
+
+  try {
+    // Do NOT set Content-Type manually — fetch auto-generates the boundary for FormData
+    const res = await fetch(`${BASE_URL}/audio/chunk`, {
+      method: "POST",
+      body: form,
+      headers,
+      signal: controller.signal,
+    });
+
+    const text = await res.text();
+    if (!res.ok) throw new Error(text);
+    return JSON.parse(text);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function sendAudioChunk(uri) {
+  for (let attempt = 0; attempt <= AUDIO_CHUNK_MAX_RETRIES; attempt++) {
+    try {
+      return await _sendAudioChunkOnce(uri);
+    } catch (e) {
+      const isLast = attempt >= AUDIO_CHUNK_MAX_RETRIES;
+      if (isLast) throw e;
+      // Transient failure — wait briefly then retry
+      console.warn(`[API] Audio chunk attempt ${attempt + 1} failed: ${e.message} — retrying...`);
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
 }
 
 // ─── Voice enrollment (caregiver) ────────────────────

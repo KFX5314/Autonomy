@@ -174,7 +174,7 @@ def identify_speaker(
     color = "\033[92m" if match else "\033[91m"
     rst = "\033[0m"
     label = "PACIENTE" if match else "DESCONOCIDO"
-    print(f"\n{color}  🎤 SPEAKER ID: {label}{rst}")
+    print(f"\n{color}  [SPK] SPEAKER ID: {label}{rst}")
     print(f"     Similitud: {bar} {similarity:.3f}  (umbral {threshold})")
 
     return match
@@ -230,7 +230,7 @@ def diarize_segments(
         rst = "\033[0m"
         time_range = f"{seg['start']:.1f}s-{seg['end']:.1f}s"
         extra = f" ({tag_reason})" if tag_reason else ""
-        print(f"  {color}🎤 [{seg['speaker']}]{rst} {time_range}{extra}  {sim_str}")
+        print(f"  {color}[SPK] [{seg['speaker']}]{rst} {time_range}{extra}  {sim_str}")
         print(f"     \"{seg['text'][:80]}\"")
 
     return segments

@@ -1,4 +1,4 @@
-﻿"""
+"""
 Audio processing route - receives audio chunks from patient app,
 runs STT + episode detection, returns result.
 """
@@ -22,10 +22,11 @@ from ..models.alert import Alert
 from ..schemas.alert import AudioChunkResponse
 from ..auth import require_patient
 from ..services.stt_service import transcribe_audio
-from ..services.episode_detector import EpisodeDetector, _extract_patient_text
+from ..services.episode_detector import EpisodeDetector
 from ..services.speaker_id_service import diarize_segments, build_tagged_transcript
 from ..services.memory_service import (
     get_short_term,
+    get_recent_conversation,
     should_schedule_journal,
     summarize_and_append,
 )
@@ -104,10 +105,10 @@ async def process_audio_chunk(
     async with _get_audio_semaphore():
         try:
                 t0 = time.time()
-                print(f"\n\033[96m{'â•'*60}\033[0m")
-                print(f"\033[96m  â±  AUDIO RECIBIDO {datetime.now().strftime('%H:%M:%S.%f')[:-3]}\033[0m")
+                print(f"\n\033[96m{'='*60}\033[0m")
+                print(f"\033[96m  >> AUDIO RECIBIDO {datetime.now().strftime('%H:%M:%S.%f')[:-3]}\033[0m")
 
-                # 0. Check audio duration â€” reject files > 30s
+                # 0. Check audio duration -- reject files > 30s
                 MAX_AUDIO_SECONDS = 30
                 audio_duration = None
                 try:
@@ -117,9 +118,9 @@ async def process_audio_chunk(
                         capture_output=True, text=True, timeout=5,
                     )
                     audio_duration = float(probe.stdout.strip())
-                    print(f"\033[96m  ðŸ“ DURACIÃ“N AUDIO: {audio_duration:.1f}s\033[0m")
+                    print(f"\033[96m  [DUR] DURACION AUDIO: {audio_duration:.1f}s\033[0m")
                     if audio_duration > MAX_AUDIO_SECONDS:
-                        print(f"\033[93m  âš   Audio demasiado largo ({audio_duration:.1f}s > {MAX_AUDIO_SECONDS}s) â€” descartado\033[0m")
+                        print(f"\033[93m  [!] Audio demasiado largo ({audio_duration:.1f}s > {MAX_AUDIO_SECONDS}s) -- descartado\033[0m")
                         return AudioChunkResponse(
                             transcript="", episode=False, severity=0,
                             reason=f"Audio demasiado largo ({audio_duration:.0f}s)",
@@ -135,16 +136,16 @@ async def process_audio_chunk(
                 transcript_text = stt_result["text"]
                 segments = stt_result.get("segments", [])
 
-                print(f"\033[96m  â±  WHISPER ({config.STT_MODEL}): {t_stt_end - t_stt_start:.2f}s\033[0m")
+                print(f"\033[96m  >> WHISPER ({config.STT_MODEL}): {t_stt_end - t_stt_start:.2f}s\033[0m")
 
                 if not transcript_text.strip():
-                    print("\033[90m  ... silencio / audio vacÃ­o (o alucinaciÃ³n filtrada)\033[0m")
+                    print("\033[90m  ... silencio / audio vacio (o alucinacion filtrada)\033[0m")
                     return AudioChunkResponse(
                         transcript="", episode=False, severity=0,
                         reason="Silencio o audio no reconocido",
                     )
 
-                print(f"\033[96m  ðŸ“ TEXTO DETECTADO:\033[0m {transcript_text}")
+                print(f"\033[96m  [TXT] {transcript_text}\033[0m")
 
                 # 1b. Per-segment speaker diarization (if voice sample enrolled)
                 t_diar_start = time.time()
@@ -153,14 +154,14 @@ async def process_audio_chunk(
                         tmp_path, segments, patient.voice_embedding
                     )
                     transcript_text = build_tagged_transcript(segments)
-                    print(f"\033[96m  ðŸ“‹ TRANSCRIPCIÃ“N ETIQUETADA:\033[0m")
+                    print(f"\033[96m  [TAG] TRANSCRIPCION ETIQUETADA:\033[0m")
                     for line in transcript_text.split("\n"):
                         print(f"     {line}")
                 else:
                     if not patient.voice_embedding:
-                        print("\033[93m  âš   Sin muestra de voz - no se identifica hablante\033[0m")
+                        print("\033[93m  [!] Sin muestra de voz - no se identifica hablante\033[0m")
                 t_diar_end = time.time()
-                print(f"\033[96m  â±  DIARIZACIÃ“N:    {t_diar_end - t_diar_start:.2f}s\033[0m")
+                print(f"\033[96m  >> DIARIZACION:    {t_diar_end - t_diar_start:.2f}s\033[0m")
 
                 # 2. Store transcript
                 transcript = Transcript(
@@ -180,25 +181,48 @@ async def process_audio_chunk(
 
                 stm = get_short_term(patient.id, db, exclude_transcript_id=transcript.id)
                 if stm:
-                    print(f"\033[96m  🧠 STM: {stm.count(chr(10)) + 1} utterance(s), {len(stm)} chars\033[0m")
+                    print(f"\033[96m  [STM] {stm.count(chr(10)) + 1} utterance(s), {len(stm)} chars\033[0m")
 
-                # 3a. Wake-word shortcut: if the patient says a configured
-                # wake word, skip the episode detector and answer the query.
+                # 3a. Wake-word shortcut: if ANYONE says a configured wake
+                # word, skip the episode detector and answer the query.
+                # We check the full transcript (not just [PACIENTE]) because
+                # diarization may misidentify the patient as [OTRO], and also
+                # a caregiver could ask on the patient's behalf.
                 wake_words = [w.lower() for w in context_data.get("assistant_wake_words", []) if isinstance(w, str) and w.strip()]
-                patient_only_text = _extract_patient_text(transcript_text).lower()
-                triggered_wake = next((w for w in wake_words if w and w in patient_only_text), None)
+                full_text_lower = transcript_text.lower()
+                triggered_wake = next((w for w in wake_words if w and w in full_text_lower), None)
 
                 if triggered_wake:
                     from ..services.assistant_service import answer_patient_query
+                    import re as _re
+
+                    # Build the query: strip speaker tags and the wake word
+                    # itself so the LLM receives a clean question.
+                    raw_query = _re.sub(r"\[(?:PACIENTE|OTRO)\]\s*", "", transcript_text)
+                    query_text = raw_query.lower().replace(triggered_wake, "").strip()
+                    if not query_text:
+                        # Wake word was the only thing said — use full
+                        # transcript so the LLM can infer from STM context.
+                        query_text = raw_query.strip()
+
+                    # Use full conversation context (all speakers) so the
+                    # assistant can reference what ANYONE said recently.
+                    full_conv = get_recent_conversation(
+                        patient.id, db, exclude_transcript_id=transcript.id
+                    )
+
                     t_llm_start = time.time()
                     assistant_out = await answer_patient_query(
                         patient=patient,
-                        patient_text=patient_only_text,
-                        stm=stm,
+                        patient_text=query_text,
+                        full_transcript=transcript_text,
+                        stm=full_conv,
                         db=db,
                     )
                     t_llm_end = time.time()
-                    print(f"\033[94m  🗣  WAKE-WORD '{triggered_wake}' → assistant reply in {t_llm_end - t_llm_start:.2f}s\033[0m")
+                    print(f"\033[94m  [WAKE] '{triggered_wake}' -> assistant reply in {t_llm_end - t_llm_start:.2f}s\033[0m")
+                    if assistant_out.get("reply_text"):
+                        print(f"\033[94m     Respuesta: {assistant_out['reply_text'][:120]}\033[0m")
                     db.commit()
 
                     if should_schedule_journal(patient.id):
@@ -219,7 +243,7 @@ async def process_audio_chunk(
                 t_llm_start = time.time()
                 result = await detector.analyze(transcript_text, short_term_memory=stm)
                 t_llm_end = time.time()
-                print(f"\033[96m  â±  LLM ({config.LLM_MODEL}): {t_llm_end - t_llm_start:.2f}s\033[0m")
+                print(f"\033[96m  >> LLM ({config.LLM_MODEL}): {t_llm_end - t_llm_start:.2f}s\033[0m")
 
                 alert_id = None
                 if result.is_episode:
@@ -252,14 +276,14 @@ async def process_audio_chunk(
 
                 # --- Debug: show result ---
                 if result.is_episode:
-                    print(f"\033[91m  ðŸš¨ ALERTA: SÃ  (severidad {result.severity})\033[0m")
-                    print(f"\033[91m     RazÃ³n: {result.reason}\033[0m")
+                    print(f"\033[91m  [ALERTA] SI (severidad {result.severity})\033[0m")
+                    print(f"\033[91m     Razon: {result.reason}\033[0m")
                     if result.llm_response:
                         print(f"\033[93m     Respuesta: {result.llm_response[:120]}\033[0m")
                 else:
-                    print(f"\033[92m  âœ… ALERTA: NO\033[0m")
-                print(f"\033[96m  â±  TOTAL:          {time.time() - t0:.2f}s\033[0m")
-                print(f"\033[96m{'â•'*60}\033[0m\n")
+                    print(f"\033[92m  [OK] ALERTA: NO\033[0m")
+                print(f"\033[96m  >> TOTAL:          {time.time() - t0:.2f}s\033[0m")
+                print(f"\033[96m{'='*60}\033[0m\n")
 
                 # 4. Fire-and-forget: condense the STM buffer into a journal entry.
                 # Gated per-patient so it runs at most every JOURNAL_INTERVAL_MINUTES.
