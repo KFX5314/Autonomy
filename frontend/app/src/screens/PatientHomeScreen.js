@@ -9,15 +9,11 @@ import React, { useRef, useState, useEffect, useCallback } from "react";
 import { View, Text, Pressable, StyleSheet, Alert, AppState } from "react-native";
 import { Audio } from "expo-av";
 import * as Speech from "expo-speech";
+import appConfig from "../config/appConfig";
 import { sendAudioChunk } from "../services/api";
 
 /* ── VAD tuning knobs ─────────────────────────────────────── */
-const DEFAULT_THRESHOLD    = -45;   // initial dBFS threshold (before calibration)
-const SILENCE_DURATION_MS  = 1800;  // quiet after speech → send (Spanish speakers pause mid-sentence)
-const MIN_CHUNK_MS         = 2000;  // never send before 2 s
-const MAX_CHUNK_MS         = 12000; // hard ceiling per chunk (faster-whisper is fast enough)
-const POLL_INTERVAL_MS     = 250;   // how often to poll metering
-const SPEECH_CONFIRM_COUNT = 3;     // consecutive polls above threshold to confirm speech (reduces false starts)
+const { patientVad, tts } = appConfig;
 
 export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
   const [listening, setListening] = useState(false);
@@ -26,7 +22,7 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
   const recordingRef  = useRef(null);
   const abortRef      = useRef(null);
   const listeningRef  = useRef(false);
-  const thresholdRef  = useRef(DEFAULT_THRESHOLD);  // calibrated threshold, persists across chunks
+  const thresholdRef  = useRef(patientVad.defaultThresholdDb);  // calibrated threshold, persists across chunks
   const meteringRef   = useRef([]);                  // [{t: seconds, dB: number}] for current chunk
 
   /* ── start a metering-enabled recording ─────────────────── */
@@ -78,11 +74,11 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
         }
         if (result.mode === "assistant" && result.reply_text) {
           setLastReply(result.reply_text);
-          Speech.speak(result.reply_text, { language: "es-ES", rate: 0.9 });
+          Speech.speak(result.reply_text, { language: tts.language, rate: tts.assistantRate });
           setStatus(`🗣 ${result.reply_text.substring(0, 80)}`);
         } else if (result.episode && result.reply_text) {
           setLastReply(result.reply_text);
-          Speech.speak(result.reply_text, { language: "es-ES", rate: 0.85 });
+          Speech.speak(result.reply_text, { language: tts.language, rate: tts.episodeRate });
           setStatus("⚠️ Episodio detectado - Tu responsable ha sido avisado");
         }
       }
@@ -116,31 +112,45 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
     const silenceSamples = [];
 
     for (const m of metering) {
-      if (m.dB <= -155) continue; // skip broken readings
+      if (m.dB <= patientVad.invalidMeteringDb) continue; // skip broken readings
       const inSpeech = segments.some(s => m.t >= s.start && m.t <= s.end);
       if (inSpeech) speechSamples.push(m.dB);
       else silenceSamples.push(m.dB);
     }
 
-    if (speechSamples.length < 2 || silenceSamples.length < 2) return;
+    if (
+      speechSamples.length < patientVad.calibrationMinSamples ||
+      silenceSamples.length < patientVad.calibrationMinSamples
+    ) return;
 
-    // Speech floor = 10th percentile of speech readings (robustly low)
+    // Speech floor = low percentile of speech readings (robustly low)
     speechSamples.sort((a, b) => a - b);
-    const speechFloor = speechSamples[Math.floor(speechSamples.length * 0.1)];
+    const speechIndex = Math.min(
+      speechSamples.length - 1,
+      Math.max(0, Math.floor(speechSamples.length * patientVad.calibrationSpeechPercentile))
+    );
+    const speechFloor = speechSamples[speechIndex];
 
-    // Silence level = 90th percentile of silence readings (robustly high)
+    // Silence level = high percentile of silence readings (robustly high)
     silenceSamples.sort((a, b) => a - b);
-    const silenceLevel = silenceSamples[Math.floor(silenceSamples.length * 0.9)];
+    const silenceIndex = Math.min(
+      silenceSamples.length - 1,
+      Math.max(0, Math.floor(silenceSamples.length * patientVad.calibrationSilencePercentile))
+    );
+    const silenceLevel = silenceSamples[silenceIndex];
 
-    // Only calibrate if there's a clear gap (at least 5 dB)
-    if (speechFloor - silenceLevel < 5) {
+    // Only calibrate if there's a clear speech/silence gap.
+    if (speechFloor - silenceLevel < patientVad.calibrationMinGapDb) {
       console.log(`[CAL] Gap too small: speech floor ${speechFloor.toFixed(0)}, silence ${silenceLevel.toFixed(0)} — keeping threshold ${thresholdRef.current.toFixed(0)}`);
       return;
     }
 
     const newThreshold = (speechFloor + silenceLevel) / 2;
     // Clamp to reasonable range
-    const clamped = Math.max(-80, Math.min(-20, newThreshold));
+    const clamped = Math.max(
+      patientVad.calibrationMinThresholdDb,
+      Math.min(patientVad.calibrationMaxThresholdDb, newThreshold)
+    );
     console.log(`[CAL] speech floor=${speechFloor.toFixed(0)} silence=${silenceLevel.toFixed(0)} → threshold: ${thresholdRef.current.toFixed(0)} → ${clamped.toFixed(0)}`);
     thresholdRef.current = clamped;
   };
@@ -161,7 +171,7 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
       let speechCount = 0;
       let silenceSince = null;
       let pollCount = 0;
-      let peakDb = -160;
+      let peakDb = patientVad.meteringFloorDb;
 
       const interval = setInterval(async () => {
         if (resolved || !recordingRef.current) return;
@@ -169,7 +179,7 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
         const elapsed = Date.now() - startTime;
         pollCount++;
 
-        let dB = -160;
+        let dB = patientVad.meteringFloorDb;
         try {
           const st = await recordingRef.current.getStatusAsync();
           if (st.metering != null) dB = st.metering;
@@ -190,9 +200,11 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
         }
 
         // Metering broken fallback
-        if (elapsed > 2000 && peakDb <= -155) {
-          if (elapsed >= 5000) {
-            console.log("[VAD] Metering unavailable — sending 5s fallback chunk");
+        if (elapsed > patientVad.minChunkMs && peakDb <= patientVad.brokenMeteringThresholdDb) {
+          if (elapsed >= patientVad.brokenMeteringFallbackMs) {
+            console.log(
+              `[VAD] Metering unavailable - sending ${patientVad.brokenMeteringFallbackMs / 1000}s fallback chunk`
+            );
             done("timeout");
           }
           return;
@@ -203,24 +215,24 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
         if (isSpeech) {
           speechCount++;
           silenceSince = null;
-          if (speechCount >= SPEECH_CONFIRM_COUNT) speechDetected = true;
+          if (speechCount >= patientVad.speechConfirmCount) speechDetected = true;
         } else {
           speechCount = 0;
         }
 
         if (!isSpeech && speechDetected) {
           if (!silenceSince) silenceSince = Date.now();
-          if (Date.now() - silenceSince >= SILENCE_DURATION_MS && elapsed >= MIN_CHUNK_MS) {
+          if (Date.now() - silenceSince >= patientVad.silenceDurationMs && elapsed >= patientVad.minChunkMs) {
             console.log(`[VAD] Silence after speech — sending (${(elapsed/1000).toFixed(1)}s)`);
             done("silence");
             return;
           }
         }
 
-        if (elapsed >= MAX_CHUNK_MS) {
+        if (elapsed >= patientVad.maxChunkMs) {
           done(speechDetected ? "timeout" : "quiet");
         }
-      }, POLL_INTERVAL_MS);
+      }, patientVad.pollIntervalMs);
 
       signal.addEventListener("abort", () => done("aborted"), { once: true });
     });
@@ -243,11 +255,11 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
         }
         if (result.mode === "assistant" && result.reply_text) {
           setLastReply(result.reply_text);
-          Speech.speak(result.reply_text, { language: "es-ES", rate: 0.9 });
+          Speech.speak(result.reply_text, { language: tts.language, rate: tts.assistantRate });
           setStatus(`🗣 ${result.reply_text.substring(0, 80)}`);
         } else if (result.episode && result.reply_text) {
           setLastReply(result.reply_text);
-          Speech.speak(result.reply_text, { language: "es-ES", rate: 0.85 });
+          Speech.speak(result.reply_text, { language: tts.language, rate: tts.episodeRate });
           setStatus("⚠️ Episodio detectado - Tu responsable ha sido avisado");
         } else if (listening) {
           setStatus("Escuchando...");

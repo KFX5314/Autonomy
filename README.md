@@ -145,6 +145,14 @@ Ollama se expone por defecto en `http://127.0.0.1:11434`. El script del backend 
 
 ### 3. Backend
 
+Opcionalmente, copia `backend/.env.example` a `backend/.env` y ajusta los valores locales antes de arrancar:
+
+```powershell
+Copy-Item backend\.env.example backend\.env
+```
+
+El backend carga `.env` desde la raíz del proyecto y desde `backend/.env`. Los valores de `.env` pueden sustituir los defaults locales que inyecta `run-backend.ps1`, pero las variables de entorno reales con valores no predeterminados siguen teniendo prioridad.
+
 ```powershell
 .\scripts\run-backend.ps1
 ```
@@ -172,6 +180,8 @@ Primero genera el `.env` del frontend con la IP adecuada:
 ```powershell
 .\scripts\update-frontend-env.ps1
 ```
+
+El frontend lee su configuración desde `frontend/app/.env` usando variables `EXPO_PUBLIC_*`. Además de la URL del backend, `frontend/app/.env.example` documenta los timeouts de subida de audio, umbrales VAD/chunking, parámetros TTS y duración de la muestra de voz. El script actualiza `EXPO_PUBLIC_SERVER_URL` y conserva el resto de valores si ya existen.
 
 Después lanza Expo:
 
@@ -295,6 +305,8 @@ TFG-DEMENCIA/
 │           │   ├── CaregiverHomeScreen.js
 │           │   ├── PatientContextScreen.js
 │           │   └── SettingsScreen.js
+│           ├── config/
+│           │   └── appConfig.js
 │           └── services/
 │               ├── api.js
 │               └── session.js

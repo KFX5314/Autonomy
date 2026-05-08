@@ -1,6 +1,7 @@
 """
 TFG-DEMENCIA Backend Configuration.
-Loaded from environment variables with sensible defaults for local dev.
+Loaded from environment variables, optionally enriched from `.env` files, with
+sensible defaults for local dev.
 
 Any value that is security-sensitive (JWT_SECRET, DB_PASSWORD, CORS_ORIGINS,
 PRODUCTION) is validated on startup by server.py when PRODUCTION=1.
@@ -8,6 +9,7 @@ PRODUCTION) is validated on startup by server.py when PRODUCTION=1.
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 def _env_csv(name: str, default: str) -> list[str]:
@@ -18,6 +20,73 @@ def _env_csv(name: str, default: str) -> list[str]:
 # Known insecure development defaults. server.py rejects these when PRODUCTION=1.
 DEV_JWT_SECRET = "dev-only-insecure-secret"
 DEV_DB_PASSWORD = "tfg_pass_2024"
+
+
+_DOTENV_OVERRIDE_DEFAULTS = {
+    # Defaults set by scripts/run-backend.ps1. Treat these as local-dev
+    # placeholders so backend/.env can override them without changing the
+    # existing script flow. Non-placeholder process env vars still win.
+    "DB_USER": {"tfg_app"},
+    "DB_PASSWORD": {DEV_DB_PASSWORD},
+    "LLM_PROVIDER": {"ollama"},
+    "LLM_MODEL": {"mistral:7b-instruct"},
+    "STT_DEVICE": {"cuda"},
+    "SPEAKER_DEVICE": {"cpu"},
+}
+
+
+def _fallback_dotenv_values(path: Path) -> dict[str, str]:
+    """Parse simple KEY=VALUE .env files when python-dotenv is unavailable."""
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or not key.replace("_", "").isalnum() or key[0].isdigit():
+            continue
+        value = value.strip().strip('"').strip("'")
+        values[key] = value
+    return values
+
+
+def _read_dotenv(path: Path) -> dict[str, str]:
+    try:
+        from dotenv import dotenv_values
+        return {k: v for k, v in dotenv_values(path).items() if k and v is not None}
+    except ImportError:
+        return _fallback_dotenv_values(path)
+
+
+def _load_dotenv_files() -> None:
+    """Load root/backend .env files without trampling real process env vars.
+
+    Precedence:
+    1. Real process environment wins.
+    2. backend/.env overrides root .env.
+    3. .env may replace known local-dev placeholders injected by helper scripts.
+    4. Code defaults are used when nothing else is provided.
+    """
+    backend_dir = Path(__file__).resolve().parents[1]
+    project_root = backend_dir.parent
+    loaded_by_dotenv: set[str] = set()
+
+    for dotenv_path in (project_root / ".env", backend_dir / ".env"):
+        if not dotenv_path.exists():
+            continue
+        for key, value in _read_dotenv(dotenv_path).items():
+            current = os.environ.get(key)
+            if (
+                current is None
+                or key in loaded_by_dotenv
+                or current in _DOTENV_OVERRIDE_DEFAULTS.get(key, set())
+            ):
+                os.environ[key] = value
+                loaded_by_dotenv.add(key)
+
+
+_load_dotenv_files()
 
 
 @dataclass

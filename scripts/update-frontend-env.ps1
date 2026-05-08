@@ -56,11 +56,14 @@ $serverUrl = "http://$ip`:$port"
 $dir = Split-Path $frontendEnvPath -Parent
 if (!(Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
 
-# Write .env (overwrite)
-$envContent = @"
-EXPO_PUBLIC_SERVER_URL=$serverUrl
-"@
+# Write/update server URL while preserving any optional frontend tuning values.
+$existingLines = @()
+if (Test-Path $frontendEnvPath) {
+  $existingLines = Get-Content -Path $frontendEnvPath |
+    Where-Object { $_ -notmatch '^\s*EXPO_PUBLIC_SERVER_URL\s*=' }
+}
 
+$envContent = @("EXPO_PUBLIC_SERVER_URL=$serverUrl") + $existingLines
 Set-Content -Path $frontendEnvPath -Value $envContent -Encoding ascii
 
 Write-Host "Wrote $frontendEnvPath" -ForegroundColor Green

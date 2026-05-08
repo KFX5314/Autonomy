@@ -13,8 +13,12 @@ import {
   Animated,
 } from "react-native";
 import { Audio } from "expo-av";
+import appConfig from "../config/appConfig";
 import { getPatientContext, updatePatientContext, uploadVoiceSample } from "../services/api";
 import PhraseListEditor from "../components/PhraseListEditor";
+
+const { voiceSample } = appConfig;
+const voiceSampleSeconds = Math.round(voiceSample.durationMs / 1000);
 
 export default function PatientContextScreen({ patient, onBack }) {
   const [context, setContext] = useState(null);
@@ -33,9 +37,6 @@ export default function PatientContextScreen({ patient, onBack }) {
   const progressAnim = useRef(new Animated.Value(0)).current;
   const timerRef = useRef(null);
   const recordingRef = useRef(null);
-
-  const VOICE_DURATION_MS = 10000; // 10 seconds
-  const TICK_MS = 100;
 
   useEffect(() => {
     loadContext();
@@ -140,26 +141,26 @@ export default function PatientContextScreen({ patient, onBack }) {
       setVoiceProgress(0);
       progressAnim.setValue(0);
 
-      // Animate the bar smoothly to full over VOICE_DURATION_MS
+      // Animate the bar smoothly to full over the configured sample duration.
       Animated.timing(progressAnim, {
         toValue: 1,
-        duration: VOICE_DURATION_MS,
+        duration: voiceSample.durationMs,
         useNativeDriver: false,
       }).start();
 
       // Track progress for the text counter + auto-send at the end
       let elapsed = 0;
       timerRef.current = setInterval(() => {
-        elapsed += TICK_MS;
-        const pct = Math.min(elapsed / VOICE_DURATION_MS, 1);
+        elapsed += voiceSample.tickMs;
+        const pct = Math.min(elapsed / voiceSample.durationMs, 1);
         setVoiceProgress(pct);
-        if (elapsed >= VOICE_DURATION_MS) {
+        if (elapsed >= voiceSample.durationMs) {
           clearInterval(timerRef.current);
           timerRef.current = null;
           // Auto-send
           sendVoiceSample(recordingRef.current);
         }
-      }, TICK_MS);
+      }, voiceSample.tickMs);
     } catch (e) {
       Alert.alert("Error", "No se pudo iniciar la grabación: " + e.message);
     }
@@ -281,7 +282,8 @@ export default function PatientContextScreen({ patient, onBack }) {
 
       <Text style={styles.label}>Muestra de voz del paciente</Text>
       <Text style={styles.hint}>
-        Graba 10 segundos del paciente hablando para identificar su voz. Se envía automáticamente al completarse.
+        Graba {voiceSampleSeconds} segundos del paciente hablando para identificar su voz. Se envía automáticamente al
+        completarse.
       </Text>
       {voiceStatus === "recording" ? (
         <View>
@@ -299,7 +301,7 @@ export default function PatientContextScreen({ patient, onBack }) {
             />
           </View>
           <Text style={styles.progressText}>
-            {Math.round(voiceProgress * 10)}s / 10s
+            {Math.round(voiceProgress * voiceSampleSeconds)}s / {voiceSampleSeconds}s
           </Text>
           <Pressable style={[styles.voiceBtn, styles.voiceBtnCancel]} onPress={cancelVoiceRecording}>
             <Text style={styles.voiceBtnText}>✕ Cancelar grabación</Text>
