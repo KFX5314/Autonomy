@@ -81,8 +81,8 @@ flowchart LR
 - Asistente por palabras de activación configurables, sin crear alerta.
 - Respuesta por voz al paciente con `expo-speech`.
 - Registro de muestra de voz y diarización paciente/no paciente mediante SpeechBrain ECAPA-TDNN.
-- Gestión de alertas con transcripción, audio archivado y ACK del cuidador.
-- Diario de memoria a largo plazo generado en segundo plano a partir de transcripciones recientes.
+- Gestión de alertas con transcripción, refresco automático, audio archivado y ACK del cuidador.
+- Diario de memoria a largo plazo y vista avanzada de memoria a corto plazo para el cuidador.
 - Endurecimiento básico de seguridad: JWT, roles, límite de request, retención de audio y checks de producción.
 
 ## Requisitos previos
@@ -359,7 +359,7 @@ TFG-DEMENCIA/
 | `TRANSCRIPT_RETENTION_DAYS` | `14` | Retención temporal de transcripciones |
 | `TRANSCRIPT_MAX_ROWS` | `5000` | Máximo de transcripciones por paciente |
 | `ALERTS_AUDIO_DIR` | `backend/data/alert_audio` | Directorio de audio archivado en alertas |
-| `ALERT_AUDIO_ACK_GRACE_HOURS` | `24` | Horas tras ACK antes de borrar audio |
+| `ALERT_AUDIO_MAX_FILES_PER_PATIENT` | `50` | Máximo de audios archivados por paciente |
 | `ALERT_AUDIO_MAX_DAYS` | `30` | Retención máxima de audio de alertas |
 
 ---
@@ -389,7 +389,7 @@ TFG-DEMENCIA/
    - El backend descarta audios de más de 30 segundos.
    - `MAX_CONCURRENT_AUDIO` limita trabajos pesados simultáneos.
    - `TRANSCRIPT_RETENTION_DAYS` y `TRANSCRIPT_MAX_ROWS` controlan transcripciones.
-   - `ALERT_AUDIO_ACK_GRACE_HOURS` y `ALERT_AUDIO_MAX_DAYS` controlan audio de alertas.
+   - `ALERT_AUDIO_MAX_FILES_PER_PATIENT` y `ALERT_AUDIO_MAX_DAYS` controlan audio de alertas.
 
 7. **Almacenamiento local y audio.**
    - El token JWT se guarda en la app con `expo-secure-store`.
@@ -408,11 +408,13 @@ La documentación interactiva completa está disponible en `/docs` cuando el bac
 |---|---|---|---|
 | `POST` | `/auth/register` | Público | Registro cuidador/paciente |
 | `POST` | `/auth/login` | Público | Login y JWT |
+| `GET` | `/auth/me` | Autenticado | Consultar cuenta actual |
 | `GET` | `/patients/` | Cuidador | Listar pacientes vinculados |
 | `GET` | `/patients/{id}/context` | Cuidador | Obtener contexto |
 | `PUT` | `/patients/{id}/context` | Cuidador | Actualizar contexto |
 | `POST` | `/patients/{id}/voice-sample` | Cuidador | Subir muestra de voz |
 | `GET` | `/patients/{id}/journal` | Cuidador | Consultar diario |
+| `GET` | `/patients/{id}/short-term-memory` | Cuidador | Consultar memoria a corto plazo |
 | `POST` | `/audio/chunk` | Paciente | Subir chunk de audio |
 | `GET` | `/alerts/` | Cuidador | Listar alertas |
 | `GET` | `/alerts/{id}/audio` | Cuidador | Reproducir audio archivado |

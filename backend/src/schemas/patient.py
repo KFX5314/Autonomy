@@ -25,3 +25,11 @@ class PatientContextOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ShortTermMemoryOut(BaseModel):
+    patient_id: int
+    window_minutes: int
+    max_utterances: int
+    generated_at: datetime
+    memory: str

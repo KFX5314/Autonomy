@@ -176,7 +176,7 @@ class Config:
         "ALERTS_AUDIO_DIR",
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "alert_audio"),
     ))
-    ALERT_AUDIO_ACK_GRACE_HOURS: int = field(default_factory=lambda: int(os.getenv("ALERT_AUDIO_ACK_GRACE_HOURS", "24")))
+    ALERT_AUDIO_MAX_FILES_PER_PATIENT: int = field(default_factory=lambda: int(os.getenv("ALERT_AUDIO_MAX_FILES_PER_PATIENT", "50")))
     ALERT_AUDIO_MAX_DAYS: int = field(default_factory=lambda: int(os.getenv("ALERT_AUDIO_MAX_DAYS", "30")))
 
     @property

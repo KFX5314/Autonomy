@@ -29,6 +29,7 @@ from ..services.memory_service import (
     should_schedule_journal,
     summarize_and_append,
 )
+from ..services.alert_audio_retention import enforce_patient_audio_cap
 from ..config import config
 
 import logging
@@ -263,6 +264,7 @@ async def process_audio_chunk(
                         archive_path = os.path.join(patient_dir, f"{alert_id}{ext}")
                         shutil.move(tmp_path, archive_path)
                         alert.audio_path = archive_path
+                        enforce_patient_audio_cap(db, patient.id)
                         tmp_path = None  # signal finally block not to unlink
                     except Exception as e:
                         logger.warning(f"Could not archive alert audio: {e}")

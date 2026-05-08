@@ -8,8 +8,8 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models.user import User
 from ..models.patient import Patient, PatientContext
-from ..schemas.auth import RegisterRequest, LoginRequest, TokenResponse
-from ..auth import hash_password, verify_password, create_access_token
+from ..schemas.auth import RegisterRequest, LoginRequest, TokenResponse, UserOut
+from ..auth import hash_password, verify_password, create_access_token, get_current_user
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -78,6 +78,7 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
         access_token=token,
         role=user.role,
         user_id=user.id,
+        email=user.email,
         full_name=user.full_name,
     )
 
@@ -93,5 +94,12 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
         access_token=token,
         role=user.role,
         user_id=user.id,
+        email=user.email,
         full_name=user.full_name,
     )
+
+
+@router.get("/me", response_model=UserOut)
+def me(user: User = Depends(get_current_user)):
+    """Return the current authenticated user."""
+    return user

@@ -11,6 +11,7 @@ const publicEnv = {
   audioChunkTimeoutMs: process.env.EXPO_PUBLIC_AUDIO_CHUNK_TIMEOUT_MS,
   audioChunkMaxRetries: process.env.EXPO_PUBLIC_AUDIO_CHUNK_MAX_RETRIES,
   audioChunkRetryDelayMs: process.env.EXPO_PUBLIC_AUDIO_CHUNK_RETRY_DELAY_MS,
+  caregiverAlertRefreshMs: process.env.EXPO_PUBLIC_CAREGIVER_ALERT_REFRESH_MS,
   vadDefaultThresholdDb: process.env.EXPO_PUBLIC_VAD_DEFAULT_THRESHOLD_DB,
   vadSilenceDurationMs: process.env.EXPO_PUBLIC_VAD_SILENCE_DURATION_MS,
   vadMinChunkMs: process.env.EXPO_PUBLIC_VAD_MIN_CHUNK_MS,
@@ -73,6 +74,11 @@ const appConfig = {
     audioChunkTimeoutMs: envInt("EXPO_PUBLIC_AUDIO_CHUNK_TIMEOUT_MS", publicEnv.audioChunkTimeoutMs, 30000),
     audioChunkMaxRetries: envInt("EXPO_PUBLIC_AUDIO_CHUNK_MAX_RETRIES", publicEnv.audioChunkMaxRetries, 1),
     audioChunkRetryDelayMs: envInt("EXPO_PUBLIC_AUDIO_CHUNK_RETRY_DELAY_MS", publicEnv.audioChunkRetryDelayMs, 1000),
+  },
+
+  // Caregiver dashboard behavior.
+  caregiver: {
+    alertRefreshMs: envInt("EXPO_PUBLIC_CAREGIVER_ALERT_REFRESH_MS", publicEnv.caregiverAlertRefreshMs, 10000),
   },
 
   // Patient recording VAD/chunking thresholds and calibration knobs.

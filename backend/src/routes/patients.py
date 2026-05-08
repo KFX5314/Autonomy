@@ -4,20 +4,34 @@ Patient management routes - used by caregivers.
 
 import os
 import tempfile
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 
+from ..config import config
 from ..database import get_db
 from ..models.user import User
 from ..models.patient import Patient, PatientContext
 from ..models.journal import JournalEntry
-from ..schemas.patient import PatientOut, PatientContextUpdate, PatientContextOut
+from ..schemas.patient import PatientOut, PatientContextUpdate, PatientContextOut, ShortTermMemoryOut
 from ..schemas.journal import JournalEntryOut
 from ..auth import require_caregiver
+from ..services.memory_service import get_short_term
 from ..services.speaker_id_service import create_embedding
 
 router = APIRouter(prefix="/patients", tags=["patients"])
+
+
+def _get_owned_patient(patient_id: int, db: Session, user: User) -> Patient:
+    patient = db.query(Patient).filter(Patient.id == patient_id).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    patient_user = db.query(User).filter(User.id == patient.user_id).first()
+    if not patient_user or patient_user.caregiver_id != user.id:
+        raise HTTPException(status_code=403, detail="Not your patient")
+    return patient
 
 
 @router.get("/", response_model=list[PatientOut])
@@ -45,14 +59,7 @@ def list_patients(db: Session = Depends(get_db), user: User = Depends(require_ca
 @router.get("/{patient_id}/context", response_model=PatientContextOut)
 def get_context(patient_id: int, db: Session = Depends(get_db), user: User = Depends(require_caregiver)):
     """Get patient context JSON."""
-    patient = db.query(Patient).filter(Patient.id == patient_id).first()
-    if not patient:
-        raise HTTPException(status_code=404, detail="Patient not found")
-
-    # Verify the patient belongs to this caregiver
-    patient_user = db.query(User).filter(User.id == patient.user_id).first()
-    if not patient_user or patient_user.caregiver_id != user.id:
-        raise HTTPException(status_code=403, detail="Not your patient")
+    _get_owned_patient(patient_id, db, user)
 
     ctx = db.query(PatientContext).filter(PatientContext.patient_id == patient_id).first()
     if not ctx:
@@ -68,13 +75,7 @@ def update_context(
     user: User = Depends(require_caregiver),
 ):
     """Update patient context JSON."""
-    patient = db.query(Patient).filter(Patient.id == patient_id).first()
-    if not patient:
-        raise HTTPException(status_code=404, detail="Patient not found")
-
-    patient_user = db.query(User).filter(User.id == patient.user_id).first()
-    if not patient_user or patient_user.caregiver_id != user.id:
-        raise HTTPException(status_code=403, detail="Not your patient")
+    _get_owned_patient(patient_id, db, user)
 
     ctx = db.query(PatientContext).filter(PatientContext.patient_id == patient_id).first()
     if not ctx:
@@ -106,13 +107,7 @@ def upload_voice_sample(
     if ct and ct not in _ALLOWED:
         raise HTTPException(status_code=415, detail=f"Unsupported audio type: {ct}")
 
-    patient = db.query(Patient).filter(Patient.id == patient_id).first()
-    if not patient:
-        raise HTTPException(status_code=404, detail="Patient not found")
-
-    patient_user = db.query(User).filter(User.id == patient.user_id).first()
-    if not patient_user or patient_user.caregiver_id != user.id:
-        raise HTTPException(status_code=403, detail="Not your patient")
+    patient = _get_owned_patient(patient_id, db, user)
 
     # Save to temp file, generate embedding, clean up
     suffix = os.path.splitext(file.filename or "sample.wav")[1] or ".wav"
@@ -129,6 +124,25 @@ def upload_voice_sample(
         os.unlink(tmp_path)
 
 
+@router.get("/{patient_id}/short-term-memory", response_model=ShortTermMemoryOut)
+def get_short_term_memory(
+    patient_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_caregiver),
+):
+    """Caregiver-only: read the patient's current short-term memory window."""
+    _get_owned_patient(patient_id, db, user)
+
+    generated_at = datetime.now(timezone.utc)
+    return ShortTermMemoryOut(
+        patient_id=patient_id,
+        window_minutes=config.STM_WINDOW_MINUTES,
+        max_utterances=config.STM_MAX_UTTERANCES,
+        generated_at=generated_at,
+        memory=get_short_term(patient_id, db, now=generated_at),
+    )
+
+
 @router.get("/{patient_id}/journal", response_model=list[JournalEntryOut])
 def get_journal(
     patient_id: int,
@@ -138,15 +152,7 @@ def get_journal(
     user: User = Depends(require_caregiver),
 ):
     """Caregiver-only: read the patient's recent journal entries (LTM)."""
-    from datetime import datetime, timedelta, timezone
-
-    patient = db.query(Patient).filter(Patient.id == patient_id).first()
-    if not patient:
-        raise HTTPException(status_code=404, detail="Patient not found")
-
-    patient_user = db.query(User).filter(User.id == patient.user_id).first()
-    if not patient_user or patient_user.caregiver_id != user.id:
-        raise HTTPException(status_code=403, detail="Not your patient")
+    _get_owned_patient(patient_id, db, user)
 
     since_hours = max(1, min(since_hours, 168))  # 1 h .. 1 week
     limit = max(1, min(limit, 500))

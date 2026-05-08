@@ -86,7 +86,7 @@ async def lifespan(app: FastAPI):
     logger.info("Database tables verified/created.")
 
     # Sweep expired alert audio from a previous run.
-    from .routes.alerts import sweep_expired_alert_audio
+    from .services.alert_audio_retention import sweep_expired_alert_audio
     sweep_expired_alert_audio()
 
     # Pre-load all heavy models so first request is fast

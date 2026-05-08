@@ -2,24 +2,22 @@
 Alert routes - used by caregivers to monitor and acknowledge alerts.
 """
 
-import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from ..auth import require_caregiver
-from ..config import config
-from ..database import SessionLocal, get_db
+from ..database import get_db
 from ..models.alert import Alert
 from ..models.patient import Patient
 from ..models.transcript import Transcript
 from ..models.user import User
 from ..schemas.alert import AlertAck, AlertOut
+from ..services.alert_audio_retention import delete_alert_audio
 
-logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
 
@@ -111,36 +109,14 @@ def get_alert_audio(
     return FileResponse(alert.audio_path, media_type=media_type)
 
 
-def _cleanup_alert_audio_after_ack(alert_id: int) -> None:
-    """Background: drop archived audio after ALERT_AUDIO_ACK_GRACE_HOURS if still ACK'd."""
-    import time as _time
-    _time.sleep(config.ALERT_AUDIO_ACK_GRACE_HOURS * 3600)
-
-    db = SessionLocal()
-    try:
-        alert = db.query(Alert).filter(Alert.id == alert_id).first()
-        if not alert or alert.status != "ACK" or not alert.audio_path:
-            return
-        if os.path.exists(alert.audio_path):
-            try:
-                os.remove(alert.audio_path)
-            except OSError as e:
-                logger.warning(f"Could not delete alert audio {alert.audio_path}: {e}")
-        alert.audio_path = None
-        db.commit()
-    finally:
-        db.close()
-
-
 @router.post("/{alert_id}/ack", response_model=AlertOut)
 def acknowledge_alert(
     alert_id: int,
     body: AlertAck,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: User = Depends(require_caregiver),
 ):
-    """Acknowledge an alert and schedule its archived audio for deletion."""
+    """Acknowledge an alert and delete its archived audio immediately."""
     alert = db.query(Alert).filter(Alert.id == alert_id).first()
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
@@ -151,11 +127,11 @@ def acknowledge_alert(
 
     alert.status = "ACK"
     alert.acknowledged_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    if alert.audio_path:
+        delete_alert_audio(alert, reason="ACK cleanup")
+
     db.commit()
     db.refresh(alert)
-
-    if alert.audio_path:
-        background_tasks.add_task(_cleanup_alert_audio_after_ack, alert.id)
 
     transcript_text = None
     if alert.transcript_id:
@@ -163,33 +139,3 @@ def acknowledge_alert(
         if tx:
             transcript_text = tx.transcript_text
     return _serialize_alert(alert, transcript_text)
-
-
-def sweep_expired_alert_audio() -> None:
-    """Startup sweep: drop alert audio older than ALERT_AUDIO_MAX_DAYS regardless of ACK."""
-    db = SessionLocal()
-    try:
-        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
-            days=config.ALERT_AUDIO_MAX_DAYS
-        )
-        expired = (
-            db.query(Alert)
-            .filter(Alert.audio_path.isnot(None))
-            .filter(Alert.created_at < cutoff)
-            .all()
-        )
-        for alert in expired:
-            if alert.audio_path and os.path.exists(alert.audio_path):
-                try:
-                    os.remove(alert.audio_path)
-                except OSError as e:
-                    logger.warning(f"Sweep: could not delete {alert.audio_path}: {e}")
-            alert.audio_path = None
-        db.commit()
-        if expired:
-            logger.info(f"Alert-audio sweep cleaned {len(expired)} old files")
-    except Exception as e:
-        logger.warning(f"Alert-audio sweep failed: {e}")
-        db.rollback()
-    finally:
-        db.close()

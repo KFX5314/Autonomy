@@ -43,6 +43,7 @@ export default function LoginScreen({ onLogin }) {
       } else {
         data = await login(email, password);
       }
+      data = { ...data, email: data.email || email.trim() };
       setToken(data.access_token);
       await saveSession(data.access_token, data);
       onLogin(data);

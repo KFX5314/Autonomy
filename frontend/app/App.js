@@ -12,8 +12,8 @@ import { StatusBar } from "expo-status-bar";
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 
-import { setToken } from "./src/services/api";
-import { loadSession, clearSession } from "./src/services/session";
+import { getCurrentUser, setToken } from "./src/services/api";
+import { loadSession, saveSession, clearSession } from "./src/services/session";
 
 import LoginScreen from "./src/screens/LoginScreen";
 import PatientHomeScreen from "./src/screens/PatientHomeScreen";
@@ -30,7 +30,21 @@ export default function App() {
   useEffect(() => {
     (async () => {
       const s = await loadSession();
-      if (s) setInitialUser(s.user);
+      if (s) {
+        let user = s.user;
+        try {
+          const currentUser = await getCurrentUser();
+          user = {
+            ...user,
+            ...currentUser,
+            user_id: currentUser.id || user.user_id,
+          };
+          await saveSession(s.token, user);
+        } catch (e) {
+          console.warn("Could not refresh stored session user:", e?.message || e);
+        }
+        setInitialUser(user);
+      }
       setBooted(true);
     })();
   }, []);

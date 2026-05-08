@@ -61,6 +61,10 @@ export async function register(email, password, fullName, role, caregiverEmail) 
   });
 }
 
+export async function getCurrentUser() {
+  return request("/auth/me");
+}
+
 // ─── Patients (caregiver) ─────────────────────────────
 export async function getPatients() {
   return request("/patients/");
@@ -80,6 +84,10 @@ export async function updatePatientContext(patientId, contextJson) {
 // ─── Journal (caregiver) ─────────────────────────────
 export async function getPatientJournal(patientId, sinceHours = 24, limit = 100) {
   return request(`/patients/${patientId}/journal?since_hours=${sinceHours}&limit=${limit}`);
+}
+
+export async function getPatientShortTermMemory(patientId) {
+  return request(`/patients/${patientId}/short-term-memory`);
 }
 
 // ─── Alerts (caregiver) ──────────────────────────────
