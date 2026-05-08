@@ -29,6 +29,10 @@ EMBEDDING_DIM = 192
 SAMPLE_RATE = 16000
 MIN_SAMPLES = SAMPLE_RATE  # 1 s of audio is the minimum for a reliable embedding
 
+# Diarization similarity threshold for ECAPA-TDNN embeddings.
+# 0.40 allows for natural variations in speech or microphone distance.
+DIARIZATION_THRESHOLD = 0.40
+
 # Model cache directory (kept out of site-packages so we can wipe/reset it).
 _MODEL_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -126,9 +130,31 @@ def create_embedding(audio_path: str) -> list[float]:
     """
     Generate a 192-dim voice embedding from an audio file.
     Used when the caregiver uploads a patient voice sample.
+    Uses Whisper's VAD to strip silence before embedding to ensure
+    the reference embedding isn't polluted by background noise.
     Returns a plain list of floats (JSON-serializable).
     """
+    from .stt_service import transcribe_audio
+
+    # Run VAD to find actual speech segments
+    res = transcribe_audio(audio_path)
+    segments = res.get("segments", [])
+
     wav = _load_wav(audio_path)
+
+    if segments:
+        speech_chunks = []
+        for seg in segments:
+            start_sample = int(seg["start"] * SAMPLE_RATE)
+            end_sample = int(seg["end"] * SAMPLE_RATE)
+            speech_chunks.append(wav[start_sample:end_sample])
+        if speech_chunks:
+            filtered_wav = torch.cat(speech_chunks)
+            if filtered_wav.numel() >= MIN_SAMPLES:
+                wav = filtered_wav
+            else:
+                logger.warning(f"Voice sample VAD too short ({filtered_wav.numel()} samples). Using full audio.")
+
     embedding = _embed(wav)
     return embedding.tolist()
 
@@ -151,7 +177,7 @@ def _check_embedding_version(patient_embedding: list[float]) -> bool:
 def identify_speaker(
     audio_path: str,
     patient_embedding: list[float],
-    threshold: float = 0.65,
+    threshold: float = DIARIZATION_THRESHOLD,
 ) -> bool:
     """
     Compare an entire audio chunk against the stored patient embedding.
@@ -184,7 +210,7 @@ def diarize_segments(
     audio_path: str,
     segments: list[dict],
     patient_embedding: list[float],
-    threshold: float = 0.65,
+    threshold: float = DIARIZATION_THRESHOLD,
 ) -> list[dict]:
     """
     Per-segment speaker identification.

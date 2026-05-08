@@ -62,9 +62,9 @@ def get_short_term(
     max_chars: int | None = None,
     exclude_transcript_id: int | None = None,
 ) -> str:
-    """Build the STM string for a patient (PATIENT-only lines).
+    """Build the STM string for a patient.
 
-    Format: one line per utterance, oldest first:
+    Format: one line per utterance, newest first:
         [HH:MM] texto
 
     Truncated oldest-first to respect max_chars. Returns "" if there is
@@ -113,61 +113,6 @@ def get_short_term(
     return "\n".join(lines)
 
 
-def get_recent_conversation(
-    patient_id: int,
-    db: Session,
-    now: datetime | None = None,
-    window_minutes: int | None = None,
-    max_entries: int = 20,
-    max_chars: int | None = None,
-    exclude_transcript_id: int | None = None,
-) -> str:
-    """Build a full conversation context string (ALL speakers).
-
-    Unlike get_short_term() which only keeps [PACIENTE] lines, this returns
-    the raw tagged transcript text so the LLM sees the full conversation
-    (useful for the assistant service and journal summarization).
-
-    Format: one line per transcript, oldest first:
-        [HH:MM] full tagged text
-
-    Returns "" if there is nothing to show.
-    """
-    now = now or datetime.now(timezone.utc)
-    window_minutes = window_minutes or config.STM_WINDOW_MINUTES
-    max_chars = max_chars or config.STM_MAX_CHARS
-
-    cutoff = now - timedelta(minutes=window_minutes)
-    cutoff_naive = cutoff.replace(tzinfo=None)
-
-    q = (
-        db.query(Transcript)
-        .filter(Transcript.patient_id == patient_id)
-        .filter(Transcript.started_at >= cutoff_naive)
-    )
-    if exclude_transcript_id is not None:
-        q = q.filter(Transcript.id != exclude_transcript_id)
-    rows = q.order_by(Transcript.started_at.desc()).limit(max_entries).all()
-
-    if not rows:
-        return ""
-
-    lines: list[str] = []
-    for row in reversed(rows):  # oldest-first
-        ts = row.started_at.strftime("%H:%M")
-        text = (row.transcript_text or "").strip()
-        if text:
-            lines.append(f"[{ts}] {text}")
-
-    # Enforce char cap by dropping oldest until it fits.
-    total = sum(len(l) + 1 for l in lines)
-    while total > max_chars and len(lines) > 1:
-        dropped = lines.pop(0)
-        total -= len(dropped) + 1
-
-    return "\n".join(lines)
-
-
 def should_schedule_journal(patient_id: int, now: datetime | None = None) -> bool:
     """Check whether enough time has passed since the last journal run for this patient."""
     now = now or datetime.now(timezone.utc)
@@ -181,7 +126,7 @@ def should_schedule_journal(patient_id: int, now: datetime | None = None) -> boo
 
 
 async def summarize_and_append(patient_id: int) -> None:
-    """Background task: condense the current conversation into one journal entry.
+    """Background task: condense the current STM into one journal entry.
 
     Opens its own DB session so it is decoupled from the request.
     Silently no-ops when there is not enough material.
@@ -189,30 +134,25 @@ async def summarize_and_append(patient_id: int) -> None:
     db: Session = SessionLocal()
     try:
         now = datetime.now(timezone.utc)
-
-        # Use full conversation (all speakers) for the journal summary.
-        # The patient's day includes what others say around them.
-        conversation = get_recent_conversation(patient_id, db, now=now)
-        if not conversation:
-            logger.debug(f"[journal] patient={patient_id}: no recent conversation, skipping.")
+        stm = get_short_term(patient_id, db, now=now)
+        if not stm:
+            logger.debug(f"[journal] patient={patient_id}: STM empty, skipping.")
             return
 
-        # Require at least some meaningful material (1 transcript entry).
-        if len(conversation.strip()) < 15:
-            logger.debug(f"[journal] patient={patient_id}: conversation too short ({len(conversation)} chars), skipping.")
+        # Require at least 3 utterances worth of material.
+        if stm.count("\n") < 2:
+            logger.debug(f"[journal] patient={patient_id}: STM too small ({stm.count(chr(10)) + 1} lines), skipping.")
             return
 
         # Ask the LLM for a short third-person summary.
         system = (
-            "Eres un asistente que escribe un diario del dia de una persona con demencia. "
-            "Resume lo que ha hecho o dicho (y lo que pasa a su alrededor) en tercera persona, "
-            "en 1 o 2 frases cortas, neutro y factual, maximo 30 palabras. "
-            "Las lineas marcadas [PACIENTE] son del paciente; las marcadas [OTRO] son de "
-            "acompanantes o cuidadores. Responde SOLO con el resumen, sin comillas ni prefijos."
+            "Eres un asistente que escribe un diario del día de una persona con demencia. "
+            "Resume lo que ha hecho o dicho en tercera persona, en 1 o 2 frases cortas, "
+            "neutro y factual, máximo 30 palabras. Responde SOLO con el resumen, sin comillas ni prefijos."
         )
         user_msg = (
-            "Transcripciones recientes (hora entre corchetes):\n"
-            f"{conversation}\n\n"
+            "Transcripciones recientes (hora entre corchetes, sólo frases del paciente):\n"
+            f"{stm}\n\n"
             "Escribe una entrada de diario."
         )
         llm = get_llm_provider()

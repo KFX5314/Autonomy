@@ -22,11 +22,10 @@ from ..models.alert import Alert
 from ..schemas.alert import AudioChunkResponse
 from ..auth import require_patient
 from ..services.stt_service import transcribe_audio
-from ..services.episode_detector import EpisodeDetector
+from ..services.episode_detector import EpisodeDetector, _extract_patient_text
 from ..services.speaker_id_service import diarize_segments, build_tagged_transcript
 from ..services.memory_service import (
     get_short_term,
-    get_recent_conversation,
     should_schedule_journal,
     summarize_and_append,
 )
@@ -183,40 +182,36 @@ async def process_audio_chunk(
                 if stm:
                     print(f"\033[96m  [STM] {stm.count(chr(10)) + 1} utterance(s), {len(stm)} chars\033[0m")
 
-                # 3a. Wake-word shortcut: if ANYONE says a configured wake
-                # word, skip the episode detector and answer the query.
-                # We check the full transcript (not just [PACIENTE]) because
-                # diarization may misidentify the patient as [OTRO], and also
-                # a caregiver could ask on the patient's behalf.
+                # 3a. Wake-word shortcut: if the patient says a configured
+                # wake word, skip the episode detector and answer the query.
                 wake_words = [w.lower() for w in context_data.get("assistant_wake_words", []) if isinstance(w, str) and w.strip()]
-                full_text_lower = transcript_text.lower()
-                triggered_wake = next((w for w in wake_words if w and w in full_text_lower), None)
+                patient_only_text = _extract_patient_text(transcript_text).lower()
+                triggered_wake = next((w for w in wake_words if w and w in patient_only_text), None)
 
                 if triggered_wake:
                     from ..services.assistant_service import answer_patient_query
-                    import re as _re
 
-                    # Build the query: strip speaker tags and the wake word
-                    # itself so the LLM receives a clean question.
-                    raw_query = _re.sub(r"\[(?:PACIENTE|OTRO)\]\s*", "", transcript_text)
-                    query_text = raw_query.lower().replace(triggered_wake, "").strip()
+                    # Build the full question for the LLM by combining:
+                    # 1. The current transcript (full, including [OTRO] context)
+                    # 2. The patient's own text from this chunk (after removing
+                    #    the wake word itself so it doesn't confuse the LLM)
+                    # The STM is also passed and injected into the prompt by
+                    # answer_patient_query, giving the LLM the recent
+                    # conversation history to answer questions like
+                    # "what time did I have to buy bread?"
+                    query_text = patient_only_text.replace(triggered_wake, "").strip()
                     if not query_text:
-                        # Wake word was the only thing said — use full
-                        # transcript so the LLM can infer from STM context.
-                        query_text = raw_query.strip()
-
-                    # Use full conversation context (all speakers) so the
-                    # assistant can reference what ANYONE said recently.
-                    full_conv = get_recent_conversation(
-                        patient.id, db, exclude_transcript_id=transcript.id
-                    )
+                        # The wake word was the only thing said — use the full
+                        # transcript (which may include [OTRO] lines giving
+                        # context) so the LLM still has something to work with.
+                        query_text = transcript_text.strip()
 
                     t_llm_start = time.time()
                     assistant_out = await answer_patient_query(
                         patient=patient,
                         patient_text=query_text,
                         full_transcript=transcript_text,
-                        stm=full_conv,
+                        stm=stm,
                         db=db,
                     )
                     t_llm_end = time.time()

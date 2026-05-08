@@ -46,6 +46,9 @@ node_modules/
 frontend/app/.expo/
 backend/models/
 
+# Alert audio data
+backend/data/alert_audio/
+
 # Misc
 Autonomy (respuestas) - Respuestas de formulario 1.csv
 deep-research-report.md
