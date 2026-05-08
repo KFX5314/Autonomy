@@ -9,9 +9,9 @@ import os
 import shutil
 import time
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Depends, UploadFile, File, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, UploadFile, File, Form, HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -24,6 +24,7 @@ from ..auth import require_patient
 from ..services.stt_service import transcribe_audio
 from ..services.episode_detector import EpisodeDetector, _extract_patient_text
 from ..services.speaker_id_service import diarize_segments, build_tagged_transcript
+from ..services.tts_echo_service import detect_tts_echo, normalize_tts_text, tag_as_assistant
 from ..services.memory_service import (
     get_short_term,
     should_schedule_journal,
@@ -73,10 +74,63 @@ def _validate_audio_mime(file: UploadFile) -> None:
         raise HTTPException(status_code=415, detail=f"Unsupported audio type: {ct}")
 
 
+def _response_segments(segments: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for s in segments:
+        item = {"start": s["start"], "end": s["end"]}
+        for key in ("speaker", "speaker_similarity", "speaker_confidence"):
+            if key in s:
+                item[key] = s[key]
+        out.append(item)
+    return out
+
+
+def _has_recent_assistant_transcript(
+    db: Session,
+    patient_id: int,
+    text: str | None,
+    now: datetime,
+) -> bool:
+    if not text:
+        return False
+    target = normalize_tts_text(text)
+    if not target:
+        return False
+    cutoff = (now - timedelta(milliseconds=config.TTS_ECHO_MATCH_WINDOW_MS)).replace(tzinfo=None)
+    rows = (
+        db.query(Transcript)
+        .filter(Transcript.patient_id == patient_id)
+        .filter(Transcript.started_at >= cutoff)
+        .filter(Transcript.transcript_text.like("[ASSISTANT]%"))
+        .order_by(Transcript.started_at.desc())
+        .limit(10)
+        .all()
+    )
+    return any(normalize_tts_text(row.transcript_text) == target for row in rows)
+
+
+def _store_assistant_transcript(db: Session, patient_id: int, reply_text: str | None) -> None:
+    if not reply_text or not reply_text.strip():
+        return
+    now = datetime.now(timezone.utc)
+    if _has_recent_assistant_transcript(db, patient_id, reply_text, now):
+        return
+    db.add(Transcript(
+        patient_id=patient_id,
+        started_at=now,
+        ended_at=now,
+        lang="es",
+        transcript_text=tag_as_assistant(reply_text),
+        stt_model="assistant_tts",
+    ))
+
+
 @router.post("/chunk", response_model=AudioChunkResponse)
 async def process_audio_chunk(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    recent_tts_text: str | None = Form(default=None),
+    recent_tts_age_ms: int | None = Form(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(require_patient),
 ):
@@ -147,9 +201,25 @@ async def process_audio_chunk(
 
                 print(f"\033[96m  [TXT] {transcript_text}\033[0m")
 
-                # 1b. Per-segment speaker diarization (if voice sample enrolled)
+                # 1b. Recognize leaked app TTS before speaker verification.
+                # The transcript is still stored because [ASSISTANT] is useful
+                # short-term context, but it must never fire an alert.
+                is_assistant_echo = False
                 t_diar_start = time.time()
-                if patient.voice_embedding and segments:
+                echo_match = detect_tts_echo(transcript_text, recent_tts_text, recent_tts_age_ms)
+                if echo_match:
+                    is_assistant_echo = True
+                    transcript_text = tag_as_assistant(transcript_text)
+                    for seg in segments:
+                        seg["speaker"] = "ASSISTANT"
+                        seg["speaker_confidence"] = "tts_echo"
+                    print(
+                        f"\033[94m  [TTS] Eco del asistente detectado "
+                        f"(ratio {echo_match.ratio:.2f}, edad {echo_match.recent_tts_age_ms} ms)\033[0m"
+                    )
+                    print(f"\033[96m  [TAG] TRANSCRIPCION ETIQUETADA:\033[0m")
+                    print(f"     {transcript_text}")
+                elif patient.voice_embedding and segments:
                     segments = diarize_segments(
                         tmp_path, segments, patient.voice_embedding
                     )
@@ -163,17 +233,43 @@ async def process_audio_chunk(
                 t_diar_end = time.time()
                 print(f"\033[96m  >> DIARIZACION:    {t_diar_end - t_diar_start:.2f}s\033[0m")
 
-                # 2. Store transcript
-                transcript = Transcript(
-                    patient_id=patient.id,
-                    started_at=now,
-                    ended_at=datetime.now(timezone.utc),
-                    lang=stt_result.get("language", "es"),
-                    transcript_text=transcript_text,
-                    stt_model=config.STT_MODEL,
+                # 2. Store transcript. Assistant echo chunks are stored unless
+                # the same assistant reply was already persisted when generated.
+                duplicate_assistant_echo = is_assistant_echo and _has_recent_assistant_transcript(
+                    db,
+                    patient.id,
+                    recent_tts_text or transcript_text,
+                    now,
                 )
-                db.add(transcript)
-                db.flush()
+                transcript = None
+                if not duplicate_assistant_echo:
+                    transcript = Transcript(
+                        patient_id=patient.id,
+                        started_at=now,
+                        ended_at=datetime.now(timezone.utc),
+                        lang=stt_result.get("language", "es"),
+                        transcript_text=transcript_text,
+                        stt_model=config.STT_MODEL,
+                    )
+                    db.add(transcript)
+                    db.flush()
+
+                if is_assistant_echo:
+                    db.commit()
+                    stored_msg = "transcript guardado" if not duplicate_assistant_echo else "duplicado omitido"
+                    print(f"\033[92m  [OK] ECO ASSISTANT: {stored_msg}, sin alerta\033[0m")
+                    print(f"\033[96m  >> TOTAL:          {time.time() - t0:.2f}s\033[0m")
+                    print(f"\033[96m{'='*60}\033[0m\n")
+                    return AudioChunkResponse(
+                        transcript=transcript_text,
+                        episode=False,
+                        severity=0,
+                        reason="Eco TTS del asistente",
+                        reply_text=None,
+                        alert_id=None,
+                        mode="idle",
+                        segments=_response_segments(segments),
+                    )
 
                 # 3. Episode detection (with short-term memory injected for context)
                 ctx = db.query(PatientContext).filter(PatientContext.patient_id == patient.id).first()
@@ -219,6 +315,7 @@ async def process_audio_chunk(
                     print(f"\033[94m  [WAKE] '{triggered_wake}' -> assistant reply in {t_llm_end - t_llm_start:.2f}s\033[0m")
                     if assistant_out.get("reply_text"):
                         print(f"\033[94m     Respuesta: {assistant_out['reply_text'][:120]}\033[0m")
+                        _store_assistant_transcript(db, patient.id, assistant_out.get("reply_text"))
                     db.commit()
 
                     if should_schedule_journal(patient.id):
@@ -232,7 +329,7 @@ async def process_audio_chunk(
                         reply_text=assistant_out.get("reply_text"),
                         alert_id=None,
                         mode="assistant",
-                        segments=[{"start": s["start"], "end": s["end"]} for s in segments],
+                        segments=_response_segments(segments),
                     )
 
                 detector = EpisodeDetector(context_data)
@@ -269,6 +366,9 @@ async def process_audio_chunk(
                     except Exception as e:
                         logger.warning(f"Could not archive alert audio: {e}")
 
+                    if result.llm_response:
+                        _store_assistant_transcript(db, patient.id, result.llm_response)
+
                 db.commit()
 
                 # --- Debug: show result ---
@@ -295,7 +395,7 @@ async def process_audio_chunk(
                     reply_text=result.llm_response,
                     alert_id=alert_id,
                     mode="episode" if result.is_episode else "idle",
-                    segments=[{"start": s["start"], "end": s["end"]} for s in segments],
+                    segments=_response_segments(segments),
                 )
         finally:
             if tmp_path and os.path.exists(tmp_path):

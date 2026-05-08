@@ -3,7 +3,7 @@ Speaker identification using SpeechBrain ECAPA-TDNN.
 
 Runs fully locally (public HF model, no auth token). Produces 192-dim
 embeddings with better speaker separation than Resemblyzer's 256-dim
-voice encoder, so we raise the diarization threshold to 0.65.
+voice encoder.
 
 Embeddings from the old Resemblyzer encoder (256-dim) are detected at
 runtime and ignored with a warning — caregivers must re-record the voice
@@ -28,10 +28,12 @@ logger = logging.getLogger(__name__)
 EMBEDDING_DIM = 192
 SAMPLE_RATE = 16000
 MIN_SAMPLES = SAMPLE_RATE  # 1 s of audio is the minimum for a reliable embedding
+MIN_ENROLLMENT_SPEECH_SAMPLES = SAMPLE_RATE * 3
 
 # Diarization similarity threshold for ECAPA-TDNN embeddings.
 # 0.40 allows for natural variations in speech or microphone distance.
-DIARIZATION_THRESHOLD = 0.40
+DIARIZATION_THRESHOLD = config.SPEAKER_DIARIZATION_THRESHOLD
+LOW_CONFIDENCE_MARGIN = 0.08
 
 # Model cache directory (kept out of site-packages so we can wipe/reset it).
 _MODEL_DIR = os.path.join(
@@ -126,6 +128,15 @@ def _embed(wav: torch.Tensor) -> np.ndarray:
     return emb.astype(np.float32)
 
 
+def _speaker_confidence(similarity: float, threshold: float) -> str:
+    return "low" if abs(similarity - threshold) <= LOW_CONFIDENCE_MARGIN else "high"
+
+
+def _similarity_bar(similarity: float) -> str:
+    clamped = max(0.0, min(1.0, similarity))
+    return "█" * int(clamped * 20) + "░" * (20 - int(clamped * 20))
+
+
 def create_embedding(audio_path: str) -> list[float]:
     """
     Generate a 192-dim voice embedding from an audio file.
@@ -150,10 +161,26 @@ def create_embedding(audio_path: str) -> list[float]:
             speech_chunks.append(wav[start_sample:end_sample])
         if speech_chunks:
             filtered_wav = torch.cat(speech_chunks)
+            speech_seconds = filtered_wav.numel() / SAMPLE_RATE
             if filtered_wav.numel() >= MIN_SAMPLES:
                 wav = filtered_wav
+                if filtered_wav.numel() < MIN_ENROLLMENT_SPEECH_SAMPLES:
+                    logger.warning(
+                        "Voice sample has only %.1fs of detected speech. "
+                        "For better diarization, record a clean 10-20s sample.",
+                        speech_seconds,
+                    )
             else:
-                logger.warning(f"Voice sample VAD too short ({filtered_wav.numel()} samples). Using full audio.")
+                raise ValueError(
+                    "Voice sample is too short after VAD. Record at least 3 seconds "
+                    "of clear patient speech, ideally 10-20 seconds."
+                )
+    elif wav.numel() < MIN_ENROLLMENT_SPEECH_SAMPLES:
+        logger.warning(
+            "Voice sample has only %.1fs total audio. For better diarization, "
+            "record a clean 10-20s sample.",
+            wav.numel() / SAMPLE_RATE,
+        )
 
     embedding = _embed(wav)
     return embedding.tolist()
@@ -200,10 +227,39 @@ def identify_speaker(
     color = "\033[92m" if match else "\033[91m"
     rst = "\033[0m"
     label = "PACIENTE" if match else "DESCONOCIDO"
+    bar = _similarity_bar(similarity)
+    confidence = _speaker_confidence(similarity, threshold)
     print(f"\n{color}  [SPK] SPEAKER ID: {label}{rst}")
-    print(f"     Similitud: {bar} {similarity:.3f}  (umbral {threshold})")
+    print(f"     Similitud: {bar} {similarity:.3f}  (umbral {threshold}, confianza {confidence})")
 
     return match
+
+
+def _expanded_segment_wav(wav: torch.Tensor, segments: list[dict], index: int) -> tuple[torch.Tensor, bool]:
+    """Expand a short segment with neighboring Whisper segments when needed."""
+    seg = segments[index]
+    start_sample = int(seg["start"] * SAMPLE_RATE)
+    end_sample = int(seg["end"] * SAMPLE_RATE)
+    if end_sample - start_sample >= MIN_SAMPLES:
+        return wav[start_sample:end_sample], False
+
+    left = index - 1
+    right = index + 1
+    expanded_start = start_sample
+    expanded_end = end_sample
+    while expanded_end - expanded_start < MIN_SAMPLES and (left >= 0 or right < len(segments)):
+        if left >= 0:
+            expanded_start = min(expanded_start, int(segments[left]["start"] * SAMPLE_RATE))
+            left -= 1
+            if expanded_end - expanded_start >= MIN_SAMPLES:
+                break
+        if right < len(segments):
+            expanded_end = max(expanded_end, int(segments[right]["end"] * SAMPLE_RATE))
+            right += 1
+
+    expanded_start = max(0, expanded_start)
+    expanded_end = min(wav.numel(), expanded_end)
+    return wav[expanded_start:expanded_end], True
 
 
 def diarize_segments(
@@ -217,13 +273,14 @@ def diarize_segments(
     Takes Whisper segments [{"start", "end", "text"}] and returns them
     enriched with a "speaker" field ("PACIENTE" or "OTRO").
 
-    For very short segments (<1 s), group them with the previous speaker
-    since the embedding wouldn't be reliable (default PACIENTE because the
-    patient holds the phone).
+    Very short segments are expanded with neighboring Whisper segments before
+    embedding; if they are still too short, they inherit the previous speaker.
     """
     if not _check_embedding_version(patient_embedding):
         for seg in segments:
             seg["speaker"] = "OTRO"
+            seg["speaker_similarity"] = None
+            seg["speaker_confidence"] = "unavailable"
         return segments
 
     wav = _load_wav(audio_path)
@@ -231,24 +288,29 @@ def diarize_segments(
 
     print()
     last_speaker: str | None = None
-    for seg in segments:
-        start_sample = int(seg["start"] * SAMPLE_RATE)
-        end_sample = int(seg["end"] * SAMPLE_RATE)
-        seg_wav = wav[start_sample:end_sample]
+    for index, seg in enumerate(segments):
+        seg_wav, expanded = _expanded_segment_wav(wav, segments, index)
 
         if seg_wav.numel() < MIN_SAMPLES:
             seg["speaker"] = last_speaker or "PACIENTE"
+            seg["speaker_similarity"] = None
+            seg["speaker_confidence"] = "inherited"
             sim_str = "---"
             tag_reason = "corto"
         else:
             seg_embedding = _embed(seg_wav)
             similarity = float(np.dot(seg_embedding, patient_emb))
             is_patient = similarity >= threshold
+            confidence = _speaker_confidence(similarity, threshold)
             seg["speaker"] = "PACIENTE" if is_patient else "OTRO"
+            seg["speaker_similarity"] = similarity
+            seg["speaker_threshold"] = threshold
+            seg["speaker_confidence"] = confidence
             clamped = max(0.0, min(1.0, similarity))
             bar = "█" * int(clamped * 20) + "░" * (20 - int(clamped * 20))
-            sim_str = f"{bar} {similarity:.3f}"
-            tag_reason = None
+            bar = _similarity_bar(similarity)
+            sim_str = f"{bar} {similarity:.3f} {confidence}"
+            tag_reason = "agregado" if expanded else None
 
         last_speaker = seg["speaker"]
 

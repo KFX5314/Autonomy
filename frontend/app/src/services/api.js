@@ -119,13 +119,19 @@ export function getAuthHeader() {
 
 // ─── Audio (patient) ─────────────────────────────────
 
-async function _sendAudioChunkOnce(uri) {
+async function _sendAudioChunkOnce(uri, metadata = {}) {
   const form = new FormData();
   form.append("file", {
     uri,
     name: "audio.m4a",
     type: "audio/mp4",
   });
+  if (metadata.recentTtsText) {
+    form.append("recent_tts_text", metadata.recentTtsText);
+  }
+  if (metadata.recentTtsAgeMs != null) {
+    form.append("recent_tts_age_ms", String(metadata.recentTtsAgeMs));
+  }
 
   const headers = {};
   if (_token) {
@@ -154,10 +160,10 @@ async function _sendAudioChunkOnce(uri) {
   }
 }
 
-export async function sendAudioChunk(uri) {
+export async function sendAudioChunk(uri, metadata = {}) {
   for (let attempt = 0; attempt <= api.audioChunkMaxRetries; attempt++) {
     try {
-      return await _sendAudioChunkOnce(uri);
+      return await _sendAudioChunkOnce(uri, metadata);
     } catch (e) {
       const isLast = attempt >= api.audioChunkMaxRetries;
       if (isLast) throw e;

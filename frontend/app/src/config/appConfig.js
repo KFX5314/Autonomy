@@ -31,6 +31,7 @@ const publicEnv = {
   ttsLanguage: process.env.EXPO_PUBLIC_TTS_LANGUAGE,
   ttsAssistantRate: process.env.EXPO_PUBLIC_TTS_ASSISTANT_RATE,
   ttsEpisodeRate: process.env.EXPO_PUBLIC_TTS_EPISODE_RATE,
+  ttsEchoMetadataWindowMs: process.env.EXPO_PUBLIC_TTS_ECHO_METADATA_WINDOW_MS,
   voiceSampleDurationMs: process.env.EXPO_PUBLIC_VOICE_SAMPLE_DURATION_MS,
   voiceSampleTickMs: process.env.EXPO_PUBLIC_VOICE_SAMPLE_TICK_MS,
 };
@@ -134,6 +135,11 @@ const appConfig = {
     language: envString("EXPO_PUBLIC_TTS_LANGUAGE", publicEnv.ttsLanguage, "es-ES"),
     assistantRate: envFloat("EXPO_PUBLIC_TTS_ASSISTANT_RATE", publicEnv.ttsAssistantRate, 0.9),
     episodeRate: envFloat("EXPO_PUBLIC_TTS_EPISODE_RATE", publicEnv.ttsEpisodeRate, 0.85),
+    echoMetadataWindowMs: envInt(
+      "EXPO_PUBLIC_TTS_ECHO_METADATA_WINDOW_MS",
+      publicEnv.ttsEchoMetadataWindowMs,
+      30000
+    ),
   },
 
   // Caregiver voice-sample recording UI.

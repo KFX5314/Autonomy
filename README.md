@@ -80,7 +80,7 @@ flowchart LR
 - Detección de episodios mediante frases de alerta, expresiones regulares, contexto del paciente y LLM.
 - Asistente por palabras de activación configurables, sin crear alerta.
 - Respuesta por voz al paciente con `expo-speech`.
-- Registro de muestra de voz y diarización paciente/no paciente mediante SpeechBrain ECAPA-TDNN.
+- Registro de muestra de voz, diarización paciente/no paciente y etiquetado `[ASSISTANT]` para eco TTS.
 - Gestión de alertas con transcripción, refresco automático, audio archivado y ACK del cuidador.
 - Diario de memoria a largo plazo y vista avanzada de memoria a corto plazo para el cuidador.
 - Endurecimiento básico de seguridad: JWT, roles, límite de request, retención de audio y checks de producción.
@@ -345,8 +345,13 @@ TFG-DEMENCIA/
 | `STT_MIN_SILENCE_MS` | `300` | Silencio mínimo para VAD interno |
 | `STT_INITIAL_PROMPT` | Prompt en español | Prompt inicial para Whisper |
 | `SPEAKER_DEVICE` | `cpu` | Dispositivo para SpeechBrain |
+| `SPEAKER_DIARIZATION_THRESHOLD` | `0.40` | Umbral de similitud para etiquetar `[PACIENTE]` |
+| `TTS_ECHO_MATCH_WINDOW_MS` | `30000` | Ventana para reconocer eco TTS reciente |
+| `TTS_ECHO_MATCH_RATIO` | `0.82` | Similitud mínima para etiquetar `[ASSISTANT]` |
+| `TTS_ECHO_MIN_CHARS` | `12` | Longitud mínima para comparar eco TTS |
 | `LLM_PROVIDER` | `ollama` | `ollama` u `openai` |
 | `LLM_MODEL` | `mistral:7b-instruct` | Modelo LLM |
+| `LLM_ALERT_MIN_SEVERITY` | `3` | Severidad mínima para que el LLM cree alerta |
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | URL de Ollama |
 | `OPENAI_API_KEY` | vacío | API key si `LLM_PROVIDER=openai` |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Endpoint compatible OpenAI |
@@ -451,7 +456,7 @@ La documentación interactiva completa está disponible en `/docs` cuando el bac
 ### ¿Por qué SpeechBrain para diarización?
 
 - La muestra de voz permite crear un embedding local del paciente.
-- Cada segmento se compara contra ese embedding para etiquetar `[PACIENTE]` u `[OTRO]`.
+- Cada segmento se compara contra ese embedding para etiquetar `[PACIENTE]` u `[OTRO]`; si coincide con una respuesta TTS reciente de la app, se etiqueta `[ASSISTANT]`.
 - Las reglas se aplican sobre texto del paciente cuando hay diarización disponible, reduciendo falsas alertas por frases dichas por otra persona.
 
 ### ¿Por qué memoria STM/LTM?

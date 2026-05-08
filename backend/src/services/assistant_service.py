@@ -78,7 +78,7 @@ def _build_user_prompt(
 
     if stm:
         lines.append("")
-        lines.append("Últimas frases del paciente (memoria reciente):")
+        lines.append("Memoria reciente ([PACIENTE] y posibles respuestas [ASSISTANT] previas):")
         lines.append(stm)
 
     if full_transcript:

@@ -120,6 +120,8 @@ def upload_voice_sample(
         patient.voice_embedding = embedding
         db.commit()
         return {"status": "ok", "message": "Voice sample enrolled", "embedding_size": len(embedding)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     finally:
         os.unlink(tmp_path)
 

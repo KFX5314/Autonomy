@@ -4,7 +4,7 @@ Memory layer.
 - Short-term memory (STM): rolling window of recent utterances,
   pulled from the `transcripts` table on demand and injected into the LLM
   analysis prompt. No new storage.
-  - get_short_term(): returns [PACIENTE]-only lines (for episode detection).
+  - get_short_term(): returns [PACIENTE] and [ASSISTANT] lines by default.
   - get_recent_conversation(): returns ALL speakers with tags (for the
     assistant service, so the LLM has full conversational context).
 - Long-term memory (LTM / journal): LLM-condensed 1-2 sentence summaries of
@@ -31,8 +31,9 @@ from .llm import get_llm_provider
 logger = logging.getLogger(__name__)
 
 
-# Matches "[PACIENTE] text until next tag or end of line".
-_PACIENTE_LINE = re.compile(r"\[PACIENTE\]\s*(.+?)(?=\s*\[(?:PACIENTE|OTRO)\]|\s*$)", re.DOTALL)
+# Matches memory-relevant tags until the next tag or end of line.
+_ANY_TAG = r"(?:PACIENTE|OTRO|ASSISTANT)"
+_MEMORY_LINE = re.compile(rf"\[(PACIENTE|ASSISTANT)\]\s*(.+?)(?=\s*\[{_ANY_TAG}\]|\s*$)", re.DOTALL)
 
 # Per-patient guard for scheduling journal summarization. Keyed by patient_id,
 # value is the last UTC datetime when a summarization was *scheduled*.
@@ -40,17 +41,26 @@ _last_journal_ts: dict[int, datetime] = {}
 _last_journal_lock = Lock()
 
 
-def _extract_patient_lines(transcript_text: str) -> list[str]:
-    """Return only the [PACIENTE] fragments from a tagged transcript.
+def _extract_memory_lines(transcript_text: str, include_assistant: bool = True) -> list[tuple[str, str]]:
+    """Return memory-relevant fragments from a tagged transcript.
 
     For transcripts without speaker tags (no voice sample enrolled) we
     treat the whole text as patient-spoken.
     """
     if not transcript_text:
         return []
-    if "[PACIENTE]" not in transcript_text and "[OTRO]" not in transcript_text:
-        return [transcript_text.strip()] if transcript_text.strip() else []
-    return [m.group(1).strip() for m in _PACIENTE_LINE.finditer(transcript_text) if m.group(1).strip()]
+    if "[PACIENTE]" not in transcript_text and "[OTRO]" not in transcript_text and "[ASSISTANT]" not in transcript_text:
+        text = transcript_text.strip()
+        return [("PACIENTE", text)] if text else []
+
+    allowed = {"PACIENTE", "ASSISTANT"} if include_assistant else {"PACIENTE"}
+    lines: list[tuple[str, str]] = []
+    for m in _MEMORY_LINE.finditer(transcript_text):
+        tag = m.group(1)
+        text = m.group(2).strip()
+        if tag in allowed and text:
+            lines.append((tag, text))
+    return lines
 
 
 def get_short_term(
@@ -61,6 +71,7 @@ def get_short_term(
     max_utterances: int | None = None,
     max_chars: int | None = None,
     exclude_transcript_id: int | None = None,
+    include_assistant: bool = True,
 ) -> str:
     """Build the STM string for a patient.
 
@@ -91,8 +102,8 @@ def get_short_term(
     lines: list[str] = []  # newest-first
     for row in rows:
         ts = row.started_at.strftime("%H:%M")
-        for frag in _extract_patient_lines(row.transcript_text):
-            lines.append(f"[{ts}] {frag}")
+        for tag, frag in _extract_memory_lines(row.transcript_text, include_assistant=include_assistant):
+            lines.append(f"[{ts}] [{tag}] {frag}")
             if len(lines) >= max_utterances:
                 break
         if len(lines) >= max_utterances:
@@ -134,7 +145,7 @@ async def summarize_and_append(patient_id: int) -> None:
     db: Session = SessionLocal()
     try:
         now = datetime.now(timezone.utc)
-        stm = get_short_term(patient_id, db, now=now)
+        stm = get_short_term(patient_id, db, now=now, include_assistant=False)
         if not stm:
             logger.debug(f"[journal] patient={patient_id}: STM empty, skipping.")
             return

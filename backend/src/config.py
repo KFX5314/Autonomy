@@ -140,10 +140,18 @@ class Config:
     # ECAPA is tiny (~14 MB) and CPU inference is fast enough (<100 ms per segment),
     # so we default to CPU to keep CUDA VRAM free for Whisper + LLM.
     SPEAKER_DEVICE: str = field(default_factory=lambda: os.getenv("SPEAKER_DEVICE", "cpu"))
+    SPEAKER_DIARIZATION_THRESHOLD: float = field(default_factory=lambda: float(os.getenv("SPEAKER_DIARIZATION_THRESHOLD", "0.40")))
+
+    # Assistant TTS echo recognition. The patient app sends the most recent TTS
+    # text as a hint; the backend still requires a strong transcript match.
+    TTS_ECHO_MATCH_WINDOW_MS: int = field(default_factory=lambda: int(os.getenv("TTS_ECHO_MATCH_WINDOW_MS", "30000")))
+    TTS_ECHO_MATCH_RATIO: float = field(default_factory=lambda: float(os.getenv("TTS_ECHO_MATCH_RATIO", "0.82")))
+    TTS_ECHO_MIN_CHARS: int = field(default_factory=lambda: int(os.getenv("TTS_ECHO_MIN_CHARS", "12")))
 
     # LLM Provider: "ollama" | "openai"
     LLM_PROVIDER: str = field(default_factory=lambda: os.getenv("LLM_PROVIDER", "ollama"))
     LLM_MODEL: str = field(default_factory=lambda: os.getenv("LLM_MODEL", "mistral:7b-instruct"))
+    LLM_ALERT_MIN_SEVERITY: int = field(default_factory=lambda: int(os.getenv("LLM_ALERT_MIN_SEVERITY", "3")))
 
     # Ollama
     OLLAMA_URL: str = field(default_factory=lambda: os.getenv("OLLAMA_URL", "http://127.0.0.1:11434"))

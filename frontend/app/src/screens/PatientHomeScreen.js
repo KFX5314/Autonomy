@@ -24,6 +24,7 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
   const listeningRef  = useRef(false);
   const thresholdRef  = useRef(patientVad.defaultThresholdDb);  // calibrated threshold, persists across chunks
   const meteringRef   = useRef([]);                  // [{t: seconds, dB: number}] for current chunk
+  const recentTtsRef  = useRef(null);                // { text, markedAt } for assistant echo tagging
 
   /* ── start a metering-enabled recording ─────────────────── */
   const startRecording = async () => {
@@ -57,6 +58,33 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
   };
 
   /* ── stop current recording and send to backend ─────────── */
+  const markRecentTts = useCallback((text) => {
+    if (!text) return;
+    recentTtsRef.current = { text, markedAt: Date.now() };
+  }, []);
+
+  const getRecentTtsMetadata = useCallback(() => {
+    const recent = recentTtsRef.current;
+    if (!recent?.text || !recent.markedAt) return {};
+    const ageMs = Date.now() - recent.markedAt;
+    if (ageMs < 0 || ageMs > tts.echoMetadataWindowMs) return {};
+    return { recentTtsText: recent.text, recentTtsAgeMs: ageMs };
+  }, []);
+
+  const speakReply = useCallback((text, rate) => {
+    if (!text) return;
+    setLastReply(text);
+    markRecentTts(text);
+    Speech.speak(text, {
+      language: tts.language,
+      rate,
+      onStart: () => markRecentTts(text),
+      onDone: () => markRecentTts(text),
+      onStopped: () => markRecentTts(text),
+      onError: () => markRecentTts(text),
+    });
+  }, [markRecentTts]);
+
   const stopAndSend = async () => {
     const recording = recordingRef.current;
     if (!recording) return;
@@ -67,18 +95,16 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
       recordingRef.current = null;
       if (uri) {
         setStatus("Procesando...");
-        const result = await sendAudioChunk(uri);
+        const result = await sendAudioChunk(uri, getRecentTtsMetadata());
         calibrateThreshold(metering, result.segments || []);
         if (result.transcript) {
           setStatus(`Escuchado: "${result.transcript.substring(0, 60)}..."`);
         }
         if (result.mode === "assistant" && result.reply_text) {
-          setLastReply(result.reply_text);
-          Speech.speak(result.reply_text, { language: tts.language, rate: tts.assistantRate });
+          speakReply(result.reply_text, tts.assistantRate);
           setStatus(`🗣 ${result.reply_text.substring(0, 80)}`);
         } else if (result.episode && result.reply_text) {
-          setLastReply(result.reply_text);
-          Speech.speak(result.reply_text, { language: tts.language, rate: tts.episodeRate });
+          speakReply(result.reply_text, tts.episodeRate);
           setStatus("⚠️ Episodio detectado - Tu responsable ha sido avisado");
         }
       }
@@ -262,19 +288,17 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
     sendingRef.current = true;
     (async () => {
       try {
-        const result = await sendAudioChunk(uri);
+        const result = await sendAudioChunk(uri, getRecentTtsMetadata());
         calibrateThreshold(metering, result.segments || []);
 
         if (result.transcript) {
           setStatus(`Escuchado: "${result.transcript.substring(0, 60)}..."`);
         }
         if (result.mode === "assistant" && result.reply_text) {
-          setLastReply(result.reply_text);
-          Speech.speak(result.reply_text, { language: tts.language, rate: tts.assistantRate });
+          speakReply(result.reply_text, tts.assistantRate);
           setStatus(`🗣 ${result.reply_text.substring(0, 80)}`);
         } else if (result.episode && result.reply_text) {
-          setLastReply(result.reply_text);
-          Speech.speak(result.reply_text, { language: tts.language, rate: tts.episodeRate });
+          speakReply(result.reply_text, tts.episodeRate);
           setStatus("⚠️ Episodio detectado - Tu responsable ha sido avisado");
         } else if (listening) {
           setStatus("Escuchando...");
