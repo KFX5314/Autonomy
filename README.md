@@ -438,7 +438,7 @@ La documentación interactiva completa está disponible en `/docs` cuando el bac
 
 ### ¿Por qué VAD en frontend y también en backend?
 
-- El frontend usa metering dBFS para decidir cuándo cerrar y enviar un chunk.
+- El frontend usa metering dBFS para decidir cuándo cerrar y enviar un chunk. El límite `EXPO_PUBLIC_VAD_MAX_CHUNK_MS` se cuenta desde que el VAD confirma inicio de habla, no desde el inicio de una grabación silenciosa.
 - El backend usa Silero VAD integrado en `faster-whisper` para limpiar regiones sin voz antes de transcribir.
 - La app calibra su umbral con los timestamps devueltos por Whisper.
 
@@ -499,6 +499,6 @@ $env:LLM_MODEL="gpt-4o-mini"
 | Ollama no responde | Comprueba `ollama list` y que `ollama serve` esté activo |
 | El modelo LLM no existe | Ejecuta `ollama pull mistral:7b-instruct` o cambia `LLM_MODEL` |
 | MariaDB connection error | Comprueba servicio MariaDB, puerto 3306 y credenciales |
-| Audio demasiado largo | Reduce `MAX_CHUNK_MS` en frontend o revisa el VAD local |
+| Audio demasiado largo | Reduce `EXPO_PUBLIC_VAD_MAX_CHUNK_MS` en frontend o revisa el VAD local |
 | No aparece diarización | Graba una nueva muestra de voz desde la pantalla del cuidador |
 | No se reproduce audio de alerta | Comprueba que la alerta tenga `audio_url` y que el token del cuidador sea válido |

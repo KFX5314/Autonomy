@@ -86,7 +86,7 @@ const appConfig = {
     defaultThresholdDb: envFloat("EXPO_PUBLIC_VAD_DEFAULT_THRESHOLD_DB", publicEnv.vadDefaultThresholdDb, -45),
     silenceDurationMs: envInt("EXPO_PUBLIC_VAD_SILENCE_DURATION_MS", publicEnv.vadSilenceDurationMs, 1800),
     minChunkMs: envInt("EXPO_PUBLIC_VAD_MIN_CHUNK_MS", publicEnv.vadMinChunkMs, 2000),
-    maxChunkMs: envInt("EXPO_PUBLIC_VAD_MAX_CHUNK_MS", publicEnv.vadMaxChunkMs, 12000),
+    maxChunkMs: envInt("EXPO_PUBLIC_VAD_MAX_CHUNK_MS", publicEnv.vadMaxChunkMs, 15000),
     pollIntervalMs: envInt("EXPO_PUBLIC_VAD_POLL_INTERVAL_MS", publicEnv.vadPollIntervalMs, 250),
     speechConfirmCount: envInt("EXPO_PUBLIC_VAD_SPEECH_CONFIRM_COUNT", publicEnv.vadSpeechConfirmCount, 3),
     brokenMeteringThresholdDb: envFloat(

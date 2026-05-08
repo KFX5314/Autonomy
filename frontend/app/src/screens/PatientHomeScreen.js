@@ -169,6 +169,8 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
       const startTime = Date.now();
       let speechDetected = false;
       let speechCount = 0;
+      let speechRunStartedAt = null;
+      let speechStartedAt = null;
       let silenceSince = null;
       let pollCount = 0;
       let peakDb = patientVad.meteringFloorDb;
@@ -191,12 +193,13 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
         meteringRef.current.push({ t: elapsed / 1000, dB });
 
         const thr = thresholdRef.current;
+        const speechElapsed = speechStartedAt ? Date.now() - speechStartedAt : 0;
 
         // Debug on-screen
-        setStatus(`🎙 dB:${dB.toFixed(0)} thr:${thr.toFixed(0)} ${speechDetected ? '🔴HABLA' : '⚪'} ${(elapsed/1000).toFixed(1)}s`);
+        setStatus(`🎙 dB:${dB.toFixed(0)} thr:${thr.toFixed(0)} ${speechDetected ? '🔴HABLA' : '⚪'} ${((speechStartedAt ? speechElapsed : elapsed) / 1000).toFixed(1)}s`);
 
         if (pollCount % 4 === 0) {
-          console.log(`[VAD] dB=${dB.toFixed(1)} thr=${thr.toFixed(0)} speech=${speechDetected} count=${speechCount} peak=${peakDb.toFixed(0)} ${(elapsed/1000).toFixed(1)}s`);
+          console.log(`[VAD] dB=${dB.toFixed(1)} thr=${thr.toFixed(0)} speech=${speechDetected} count=${speechCount} peak=${peakDb.toFixed(0)} rec=${(elapsed / 1000).toFixed(1)}s speech=${(speechElapsed / 1000).toFixed(1)}s`);
         }
 
         // Metering broken fallback
@@ -213,11 +216,17 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
         const isSpeech = dB > thr;
 
         if (isSpeech) {
+          if (speechCount === 0) speechRunStartedAt = Date.now();
           speechCount++;
           silenceSince = null;
-          if (speechCount >= patientVad.speechConfirmCount) speechDetected = true;
+          if (!speechDetected && speechCount >= patientVad.speechConfirmCount) {
+            speechDetected = true;
+            speechStartedAt = speechRunStartedAt || Date.now();
+            console.log(`[VAD] Speech confirmed - max timer starts at ${((speechStartedAt - startTime) / 1000).toFixed(1)}s`);
+          }
         } else {
           speechCount = 0;
+          if (!speechDetected) speechRunStartedAt = null;
         }
 
         if (!isSpeech && speechDetected) {
@@ -229,8 +238,14 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
           }
         }
 
-        if (elapsed >= patientVad.maxChunkMs) {
-          done(speechDetected ? "timeout" : "quiet");
+        if (speechDetected && speechStartedAt && Date.now() - speechStartedAt >= patientVad.maxChunkMs) {
+          console.log(`[VAD] Max speech window reached - sending (${(elapsed / 1000).toFixed(1)}s recording, ${((Date.now() - speechStartedAt) / 1000).toFixed(1)}s since speech)`);
+          done("timeout");
+          return;
+        }
+
+        if (!speechDetected && speechCount === 0 && elapsed >= patientVad.maxChunkMs) {
+          done("quiet");
         }
       }, patientVad.pollIntervalMs);
 
