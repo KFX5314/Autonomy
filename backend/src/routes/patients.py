@@ -1,0 +1,171 @@
+"""
+Patient management routes - used by caregivers.
+"""
+
+import os
+import tempfile
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from sqlalchemy.orm import Session
+
+from ..config import config
+from ..database import get_db
+from ..models.user import User
+from ..models.patient import Patient, PatientContext
+from ..models.journal import JournalEntry
+from ..schemas.patient import PatientOut, PatientContextUpdate, PatientContextOut, ShortTermMemoryOut
+from ..schemas.journal import JournalEntryOut
+from ..auth import require_caregiver
+from ..services.memory_service import get_short_term
+from ..services.speaker_id_service import create_embedding
+
+router = APIRouter(prefix="/patients", tags=["patients"])
+
+
+def _get_owned_patient(patient_id: int, db: Session, user: User) -> Patient:
+    patient = db.query(Patient).filter(Patient.id == patient_id).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    patient_user = db.query(User).filter(User.id == patient.user_id).first()
+    if not patient_user or patient_user.caregiver_id != user.id:
+        raise HTTPException(status_code=403, detail="Not your patient")
+    return patient
+
+
+@router.get("/", response_model=list[PatientOut])
+def list_patients(db: Session = Depends(get_db), user: User = Depends(require_caregiver)):
+    """List all patients linked to this caregiver."""
+    patient_users = db.query(User).filter(
+        User.caregiver_id == user.id, User.role == "patient"
+    ).all()
+
+    results = []
+    for pu in patient_users:
+        p = db.query(Patient).filter(Patient.user_id == pu.id).first()
+        if p:
+            results.append(PatientOut(
+                id=p.id,
+                user_id=pu.id,
+                full_name=pu.full_name,
+                birth_date=p.birth_date,
+                notes=p.notes,
+                created_at=p.created_at,
+            ))
+    return results
+
+
+@router.get("/{patient_id}/context", response_model=PatientContextOut)
+def get_context(patient_id: int, db: Session = Depends(get_db), user: User = Depends(require_caregiver)):
+    """Get patient context JSON."""
+    _get_owned_patient(patient_id, db, user)
+
+    ctx = db.query(PatientContext).filter(PatientContext.patient_id == patient_id).first()
+    if not ctx:
+        raise HTTPException(status_code=404, detail="Context not found")
+    return ctx
+
+
+@router.put("/{patient_id}/context", response_model=PatientContextOut)
+def update_context(
+    patient_id: int,
+    body: PatientContextUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_caregiver),
+):
+    """Update patient context JSON."""
+    _get_owned_patient(patient_id, db, user)
+
+    ctx = db.query(PatientContext).filter(PatientContext.patient_id == patient_id).first()
+    if not ctx:
+        ctx = PatientContext(patient_id=patient_id, context_json=body.context_json)
+        db.add(ctx)
+    else:
+        ctx.context_json = body.context_json
+
+    db.commit()
+    db.refresh(ctx)
+    return ctx
+
+
+@router.post("/{patient_id}/voice-sample")
+def upload_voice_sample(
+    patient_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_caregiver),
+):
+    """Upload a voice sample (.wav) to enroll the patient's voice."""
+    # Mime-type allowlist (avoid parsing arbitrary binary blobs with ffprobe/torchaudio).
+    _ALLOWED = {
+        "audio/mp4", "audio/m4a", "audio/x-m4a", "audio/aac",
+        "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav",
+        "audio/wave", "audio/webm", "audio/ogg", "audio/3gpp",
+    }
+    ct = (file.content_type or "").lower().split(";")[0].strip()
+    if ct and ct not in _ALLOWED:
+        raise HTTPException(status_code=415, detail=f"Unsupported audio type: {ct}")
+
+    patient = _get_owned_patient(patient_id, db, user)
+
+    # Save to temp file, generate embedding, clean up
+    suffix = os.path.splitext(file.filename or "sample.wav")[1] or ".wav"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(file.file.read())
+        tmp_path = tmp.name
+
+    try:
+        embedding = create_embedding(tmp_path)
+        patient.voice_embedding = embedding
+        db.commit()
+        return {"status": "ok", "message": "Voice sample enrolled", "embedding_size": len(embedding)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        os.unlink(tmp_path)
+
+
+@router.get("/{patient_id}/short-term-memory", response_model=ShortTermMemoryOut)
+def get_short_term_memory(
+    patient_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_caregiver),
+):
+    """Caregiver-only: read the patient's current short-term memory window."""
+    _get_owned_patient(patient_id, db, user)
+
+    generated_at = datetime.now(timezone.utc)
+    return ShortTermMemoryOut(
+        patient_id=patient_id,
+        window_minutes=config.STM_WINDOW_MINUTES,
+        max_utterances=config.STM_MAX_UTTERANCES,
+        generated_at=generated_at,
+        memory=get_short_term(patient_id, db, now=generated_at),
+    )
+
+
+@router.get("/{patient_id}/journal", response_model=list[JournalEntryOut])
+def get_journal(
+    patient_id: int,
+    since_hours: int = 24,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_caregiver),
+):
+    """Caregiver-only: read the patient's recent journal entries (LTM)."""
+    _get_owned_patient(patient_id, db, user)
+
+    since_hours = max(1, min(since_hours, 168))  # 1 h .. 1 week
+    limit = max(1, min(limit, 500))
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=since_hours)).replace(tzinfo=None)
+
+    rows = (
+        db.query(JournalEntry)
+        .filter(JournalEntry.patient_id == patient_id)
+        .filter(JournalEntry.created_at >= cutoff)
+        .order_by(JournalEntry.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return rows

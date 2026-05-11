@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "TFG Demencia",
+    "slug": "tfg-demencia",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "backgroundColor": "#4A90D9"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#4A90D9"
+      },
+      "permissions": ["RECORD_AUDIO", "FOREGROUND_SERVICE"]
+    },
+    "plugins": [
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Esta app necesita acceso al micrófono para escuchar y asistir al paciente."
+        }
+      ]
+    ]
+  }
+}
