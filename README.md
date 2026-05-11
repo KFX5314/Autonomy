@@ -189,7 +189,9 @@ Después lanza Expo:
 .\scripts\run-frontend.ps1
 ```
 
-El script instala dependencias si faltan. Si detecta IP de Tailscale, la usa para Expo; si no, usa modo tunnel. Escanea el QR con Expo Go para probar la app.
+El script instala dependencias si faltan. Si detecta IP de Tailscale, la usa para Expo; si no, usa modo tunnel. Este fallback no equivale a modo LAN: depende del túnel de Expo y de conectividad externa. Si quieres probar desde otros dispositivos en la misma Wi-Fi sin Tailscale, regenera primero `frontend/app/.env` con `.\scripts\update-frontend-env.ps1` para que `EXPO_PUBLIC_SERVER_URL` apunte a la IP LAN del PC y arranca Expo con `npx expo start --host lan` desde `frontend/app`.
+
+Si el `.env` conserva una URL `http://100.x.y.z:8000` y Tailscale no está activo, la app móvil no podrá llegar al backend aunque el móvil y el PC estén en la misma red.
 
 ## Scripts disponibles
 
@@ -402,6 +404,12 @@ TFG-DEMENCIA/
    - Los chunks con alerta se archivan temporalmente para que el cuidador pueda revisarlos.
 
 > Si cualquiera de los puntos críticos falla con `PRODUCTION=1`, el backend debe detener el arranque y mostrar qué configuración falta corregir.
+
+## Publicacion del repositorio
+
+El repositorio puede publicarse sin incluir configuracion local sensible: los `.env`, `.venv`, `node_modules`, caches de Expo, informes personales y audios archivados estan excluidos por `.gitignore`.
+
+Los valores `tfg_pass_2024` y `dev-only-insecure-secret` son marcadores de desarrollo local, estan documentados como inseguros y el backend los rechaza con `PRODUCTION=1`. No los reutilices en despliegues reales ni en datos de pacientes. Para un entorno compartido o publico de pruebas, genera `JWT_SECRET`, cambia la contrasena de MariaDB y exportalas fuera del repositorio.
 
 ## API Reference
 
