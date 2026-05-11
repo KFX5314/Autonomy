@@ -78,7 +78,8 @@ def _build_user_prompt(
 
     if stm:
         lines.append("")
-        lines.append("Memoria reciente ([PACIENTE] y posibles respuestas [ASSISTANT] previas):")
+        lines.append("Memoria reciente ([PACIENTE], [PACIENTE?] y posibles respuestas [ASSISTANT] previas):")
+        lines.append("[PACIENTE?] significa posible paciente con identificacion de voz dudosa.")
         lines.append(stm)
 
     if full_transcript:

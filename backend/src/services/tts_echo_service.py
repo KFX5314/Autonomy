@@ -10,7 +10,7 @@ import unicodedata
 from ..config import config
 
 
-_TAG_RE = re.compile(r"\[(?:PACIENTE|OTRO|ASSISTANT)\]\s*", re.IGNORECASE)
+_TAG_RE = re.compile(r"\[(?:PACIENTE\?|PACIENTE|OTRO|ASSISTANT)\]\s*", re.IGNORECASE)
 _SPACE_RE = re.compile(r"\s+")
 
 

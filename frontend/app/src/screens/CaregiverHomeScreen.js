@@ -181,6 +181,7 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext, onO
           renderItem={({ item }) => (
             <View style={[styles.patientCard, { borderLeftColor: item.ui_color || "#4A90D9" }]}>
               <Text style={styles.patientName}>{item.full_name}</Text>
+              {item.username ? <Text style={styles.patientUsername}>@{item.username}</Text> : null}
               <View style={styles.patientActions}>
                 <PatientActionButton
                   icon="⚙"
@@ -362,6 +363,7 @@ const styles = StyleSheet.create({
     borderLeftWidth: 6,
   },
   patientName: { fontSize: 16, fontWeight: "700" },
+  patientUsername: { fontSize: 12, color: "#777", marginTop: 2 },
   patientActions: { marginTop: 10, gap: 8 },
   patientActionBtn: {
     minHeight: 38,

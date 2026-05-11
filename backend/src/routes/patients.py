@@ -56,6 +56,7 @@ def list_patients(db: Session = Depends(get_db), user: User = Depends(require_ca
                 id=p.id,
                 user_id=pu.id,
                 full_name=pu.full_name,
+                username=pu.username,
                 birth_date=p.birth_date,
                 notes=p.notes,
                 created_at=p.created_at,
@@ -189,7 +190,6 @@ def upload_voice_sample(
 
     patient = _get_owned_patient(patient_id, db, user)
 
-    # Save to temp file, generate embedding, clean up
     suffix = os.path.splitext(file.filename or "sample.wav")[1] or ".wav"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(file.file.read())

@@ -4,9 +4,6 @@
  * Two modes:
  *   - "alert": each row has { text, severity (1..5), regex (bool) }.
  *   - "wake": each row has { text }.
- *
- * The component is intentionally simple and uses only React Native core
- * components (no extra deps). Severity picker is a 5-way segmented control.
  */
 import React from "react";
 import { View, Text, TextInput, Pressable, Switch, StyleSheet } from "react-native";

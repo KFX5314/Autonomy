@@ -4,7 +4,7 @@ Memory layer.
 - Short-term memory (STM): rolling window of recent utterances,
   pulled from the `transcripts` table on demand and injected into the LLM
   analysis prompt. No new storage.
-  - get_short_term(): returns [PACIENTE] and [ASSISTANT] lines by default.
+  - get_short_term(): returns [PACIENTE], [PACIENTE?] and [ASSISTANT] lines by default.
   - get_recent_conversation(): returns ALL speakers with tags (for the
     assistant service, so the LLM has full conversational context).
 - Long-term memory (LTM / journal): LLM-condensed 1-2 sentence summaries of
@@ -32,8 +32,11 @@ logger = logging.getLogger(__name__)
 
 
 # Matches memory-relevant tags until the next tag or end of line.
-_ANY_TAG = r"(?:PACIENTE|OTRO|ASSISTANT)"
-_MEMORY_LINE = re.compile(rf"\[(PACIENTE|ASSISTANT)\]\s*(.+?)(?=\s*\[{_ANY_TAG}\]|\s*$)", re.DOTALL)
+_ANY_TAG = r"(?:PACIENTE\?|PACIENTE|OTRO|ASSISTANT)"
+_MEMORY_LINE = re.compile(
+    rf"\[(PACIENTE\?|PACIENTE|ASSISTANT)\]\s*(.+?)(?=\s*\[{_ANY_TAG}\]|\s*$)",
+    re.DOTALL,
+)
 
 # Per-patient guard for scheduling journal summarization. Keyed by patient_id,
 # value is the last UTC datetime when a summarization was *scheduled*.
@@ -41,7 +44,11 @@ _last_journal_ts: dict[int, datetime] = {}
 _last_journal_lock = Lock()
 
 
-def _extract_memory_lines(transcript_text: str, include_assistant: bool = True) -> list[tuple[str, str]]:
+def _extract_memory_lines(
+    transcript_text: str,
+    include_assistant: bool = True,
+    include_uncertain_patient: bool = True,
+) -> list[tuple[str, str]]:
     """Return memory-relevant fragments from a tagged transcript.
 
     For transcripts without speaker tags (no voice sample enrolled) we
@@ -49,11 +56,13 @@ def _extract_memory_lines(transcript_text: str, include_assistant: bool = True) 
     """
     if not transcript_text:
         return []
-    if "[PACIENTE]" not in transcript_text and "[OTRO]" not in transcript_text and "[ASSISTANT]" not in transcript_text:
+    if all(tag not in transcript_text for tag in ("[PACIENTE]", "[PACIENTE?]", "[OTRO]", "[ASSISTANT]")):
         text = transcript_text.strip()
         return [("PACIENTE", text)] if text else []
 
     allowed = {"PACIENTE", "ASSISTANT"} if include_assistant else {"PACIENTE"}
+    if include_uncertain_patient:
+        allowed.add("PACIENTE?")
     lines: list[tuple[str, str]] = []
     for m in _MEMORY_LINE.finditer(transcript_text):
         tag = m.group(1)
@@ -162,7 +171,9 @@ async def summarize_and_append(patient_id: int) -> None:
             "neutro y factual, máximo 30 palabras. Responde SOLO con el resumen, sin comillas ni prefijos."
         )
         user_msg = (
-            "Transcripciones recientes (hora entre corchetes, sólo frases del paciente):\n"
+            "Transcripciones recientes (hora entre corchetes, frases del paciente o posible paciente):\n"
+            "Las lineas [PACIENTE?] son posibles frases del paciente con identificacion de voz dudosa; "
+            "no las presentes como hechos seguros si no hay contexto suficiente.\n"
             f"{stm}\n\n"
             "Escribe una entrada de diario."
         )

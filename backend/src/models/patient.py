@@ -10,7 +10,7 @@ class Patient(Base):
     user_id = Column(BigInteger, ForeignKey("users.id"), nullable=False, unique=True)
     birth_date = Column(Date, nullable=True)
     notes = Column(Text, nullable=True)
-    # Legacy shape: one ECAPA embedding list. Current shape: {"samples": [...]}.
+    # Supports both a single ECAPA vector and {"samples": [...]}.
     voice_embedding = Column(JSON, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
 

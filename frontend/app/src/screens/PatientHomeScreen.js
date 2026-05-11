@@ -14,7 +14,6 @@ import appConfig from "../config/appConfig";
 import { getMyPatientSettings, sendAudioChunk } from "../services/api";
 import { loadPatientTtsEnabled } from "../services/session";
 
-/* ── VAD tuning knobs ─────────────────────────────────────── */
 const { patientVad, tts } = appConfig;
 
 export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
@@ -26,9 +25,9 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
   const recordingRef  = useRef(null);
   const abortRef      = useRef(null);
   const listeningRef  = useRef(false);
-  const thresholdRef  = useRef(patientVad.defaultThresholdDb);  // calibrated threshold, persists across chunks
-  const meteringRef   = useRef([]);                  // [{t: seconds, dB: number}] for current chunk
-  const recentTtsRef  = useRef(null);                // { text, markedAt } for assistant echo tagging
+  const thresholdRef  = useRef(patientVad.defaultThresholdDb);
+  const meteringRef   = useRef([]);
+  const recentTtsRef  = useRef(null);
   const userId = user?.user_id || user?.id;
   const ttsPlaybackEnabled = caregiverTtsEnabled && localTtsEnabled;
 
@@ -51,11 +50,9 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
     }, [userId])
   );
 
-  /* ── start a metering-enabled recording ─────────────────── */
   const startRecording = async () => {
     try {
-      // Clean up any stale recording that wasn't properly released
-      // (can happen on re-login, app resume, or abort race conditions).
+      // Release any recording left over from re-login, resume, or abort races.
       if (recordingRef.current) {
         try {
           await recordingRef.current.stopAndUnloadAsync();
@@ -82,7 +79,6 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
     }
   };
 
-  /* ── stop current recording and send to backend ─────────── */
   const markRecentTts = useCallback((text) => {
     if (!text) return;
     recentTtsRef.current = { text, markedAt: Date.now() };
@@ -144,7 +140,6 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
     }
   };
 
-  /* ── discard recording without sending ──────────────────── */
   const discardRecording = async () => {
     const recording = recordingRef.current;
     if (!recording) return;
@@ -152,10 +147,10 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
     recordingRef.current = null;
   };
 
-  /* ── calibrate threshold using Whisper segments + metering ─
-   * speech samples: metering during Whisper segments → lowest = speech floor
-   * silence samples: metering outside Whisper segments → typical = silence level
-   * threshold = midpoint between silence level and speech floor
+  /*
+   * Whisper timestamps tell us which metering samples were speech.
+   * The next VAD threshold is the midpoint between the speech floor and
+   * the silence ceiling, bounded to a conservative dBFS range.
    */
   const calibrateThreshold = (metering, segments) => {
     if (!metering.length || !segments.length) return;
@@ -164,7 +159,7 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
     const silenceSamples = [];
 
     for (const m of metering) {
-      if (m.dB <= patientVad.invalidMeteringDb) continue; // skip broken readings
+      if (m.dB <= patientVad.invalidMeteringDb) continue;
       const inSpeech = segments.some(s => m.t >= s.start && m.t <= s.end);
       if (inSpeech) speechSamples.push(m.dB);
       else silenceSamples.push(m.dB);
@@ -175,7 +170,6 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
       silenceSamples.length < patientVad.calibrationMinSamples
     ) return;
 
-    // Speech floor = low percentile of speech readings (robustly low)
     speechSamples.sort((a, b) => a - b);
     const speechIndex = Math.min(
       speechSamples.length - 1,
@@ -183,7 +177,6 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
     );
     const speechFloor = speechSamples[speechIndex];
 
-    // Silence level = high percentile of silence readings (robustly high)
     silenceSamples.sort((a, b) => a - b);
     const silenceIndex = Math.min(
       silenceSamples.length - 1,
@@ -191,14 +184,12 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
     );
     const silenceLevel = silenceSamples[silenceIndex];
 
-    // Only calibrate if there's a clear speech/silence gap.
     if (speechFloor - silenceLevel < patientVad.calibrationMinGapDb) {
       console.log(`[CAL] Gap too small: speech floor ${speechFloor.toFixed(0)}, silence ${silenceLevel.toFixed(0)} — keeping threshold ${thresholdRef.current.toFixed(0)}`);
       return;
     }
 
     const newThreshold = (speechFloor + silenceLevel) / 2;
-    // Clamp to reasonable range
     const clamped = Math.max(
       patientVad.calibrationMinThresholdDb,
       Math.min(patientVad.calibrationMaxThresholdDb, newThreshold)
@@ -207,7 +198,6 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
     thresholdRef.current = clamped;
   };
 
-  /* ── adaptive silence-detection wait ────────────────────── */
   const waitForSilenceOrTimeout = (signal) =>
     new Promise((resolve) => {
       let resolved = false;
@@ -241,20 +231,17 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
 
         if (dB > peakDb) peakDb = dB;
 
-        // Store metering sample for calibration (time relative to recording start)
         meteringRef.current.push({ t: elapsed / 1000, dB });
 
         const thr = thresholdRef.current;
         const speechElapsed = speechStartedAt ? Date.now() - speechStartedAt : 0;
 
-        // Debug on-screen
         setStatus(`🎙 dB:${dB.toFixed(0)} thr:${thr.toFixed(0)} ${speechDetected ? '🔴HABLA' : '⚪'} ${((speechStartedAt ? speechElapsed : elapsed) / 1000).toFixed(1)}s`);
 
         if (pollCount % 4 === 0) {
           console.log(`[VAD] dB=${dB.toFixed(1)} thr=${thr.toFixed(0)} speech=${speechDetected} count=${speechCount} peak=${peakDb.toFixed(0)} rec=${(elapsed / 1000).toFixed(1)}s speech=${(speechElapsed / 1000).toFixed(1)}s`);
         }
 
-        // Metering broken fallback
         if (elapsed > patientVad.minChunkMs && peakDb <= patientVad.brokenMeteringThresholdDb) {
           if (elapsed >= patientVad.brokenMeteringFallbackMs) {
             console.log(
@@ -304,7 +291,6 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
       signal.addEventListener("abort", () => done("aborted"), { once: true });
     });
 
-  /* ── send a finished chunk (fire-and-forget, max 1 in-flight) ── */
   const sendingRef = useRef(false);
   const sendInBackground = (uri, metering) => {
     if (sendingRef.current) {
@@ -342,7 +328,6 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
     })();
   };
 
-  /* ── main loop (overlaps recording with sending) ────────── */
   const recordLoop = async (signal) => {
     while (!signal.aborted) {
       await startRecording();
@@ -356,7 +341,7 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
 
       const recording = recordingRef.current;
       if (!recording) continue;
-      const metering = [...meteringRef.current]; // snapshot for calibration
+      const metering = [...meteringRef.current];
       try {
         await recording.stopAndUnloadAsync();
         const uri = recording.getURI();

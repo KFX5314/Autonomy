@@ -13,37 +13,93 @@ import {
 import { login, register, setToken } from "../services/api";
 import { saveSession } from "../services/session";
 
+function RoleSelector({ role, onChange }) {
+  return (
+    <View style={styles.roleRow}>
+      <Pressable
+        style={[styles.roleBtn, role === "caregiver" && styles.roleBtnActive]}
+        onPress={() => onChange("caregiver")}
+      >
+        <Text style={[styles.roleText, role === "caregiver" && styles.roleTextActive]}>
+          Responsable
+        </Text>
+      </Pressable>
+      <Pressable
+        style={[styles.roleBtn, role === "patient" && styles.roleBtnActive]}
+        onPress={() => onChange("patient")}
+      >
+        <Text style={[styles.roleText, role === "patient" && styles.roleTextActive]}>
+          Paciente
+        </Text>
+      </Pressable>
+    </View>
+  );
+}
+
 export default function LoginScreen({ onLogin }) {
   const [isRegister, setIsRegister] = useState(false);
+  const [identifier, setIdentifier] = useState("");
   const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [role, setRole] = useState("caregiver"); // "caregiver" | "patient"
   const [caregiverEmail, setCaregiverEmail] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const isPatient = role === "patient";
+
   const handleSubmit = async () => {
-    if (!email || !password) {
-      Alert.alert("Error", "Email y contraseña son obligatorios");
+    const cleanFullName = fullName.trim();
+    const cleanEmail = email.trim();
+    const cleanUsername = username.trim();
+    const cleanCaregiverEmail = caregiverEmail.trim();
+    const cleanIdentifier = identifier.trim();
+
+    if (!password) {
+      Alert.alert("Error", "La contraseña es obligatoria");
       return;
     }
+
+    if (!isRegister && !cleanIdentifier) {
+      Alert.alert("Error", isPatient ? "El usuario es obligatorio" : "El email es obligatorio");
+      return;
+    }
+
+    if (isRegister) {
+      if (!cleanFullName) {
+        Alert.alert("Error", "El nombre es obligatorio");
+        return;
+      }
+      if (isPatient && !cleanUsername) {
+        Alert.alert("Error", "El usuario del paciente es obligatorio");
+        return;
+      }
+      if (!isPatient && !cleanEmail) {
+        Alert.alert("Error", "El email del responsable es obligatorio");
+        return;
+      }
+      if (isPatient && !cleanCaregiverEmail) {
+        Alert.alert("Error", "Debes indicar el email del responsable");
+        return;
+      }
+    }
+
     setLoading(true);
     try {
       let data;
       if (isRegister) {
-        if (!fullName) {
-          Alert.alert("Error", "El nombre es obligatorio");
-          return;
-        }
-        if (role === "patient" && !caregiverEmail) {
-          Alert.alert("Error", "Debes indicar el email de tu responsable");
-          return;
-        }
-        data = await register(email, password, fullName, role, caregiverEmail);
+        data = await register({
+          email: isPatient ? null : cleanEmail,
+          username: isPatient ? cleanUsername : null,
+          password,
+          fullName: cleanFullName,
+          role,
+          caregiverEmail: isPatient ? cleanCaregiverEmail : null,
+        });
       } else {
-        data = await login(email, password);
+        data = await login(cleanIdentifier, password, role);
       }
-      data = { ...data, email: data.email || email.trim() };
       setToken(data.access_token);
       await saveSession(data.access_token, data);
       onLogin(data);
@@ -53,6 +109,8 @@ export default function LoginScreen({ onLogin }) {
       setLoading(false);
     }
   };
+
+  const loginPlaceholder = isPatient ? "Usuario del paciente" : "Email del responsable";
 
   return (
     <KeyboardAvoidingView
@@ -65,7 +123,9 @@ export default function LoginScreen({ onLogin }) {
           {isRegister ? "Crear cuenta" : "Iniciar sesión"}
         </Text>
 
-        {isRegister && (
+        <RoleSelector role={role} onChange={setRole} />
+
+        {isRegister ? (
           <>
             <TextInput
               style={styles.input}
@@ -74,47 +134,46 @@ export default function LoginScreen({ onLogin }) {
               onChangeText={setFullName}
             />
 
-            {/* Role selector */}
-            <View style={styles.roleRow}>
-              <Pressable
-                style={[styles.roleBtn, role === "caregiver" && styles.roleBtnActive]}
-                onPress={() => setRole("caregiver")}
-              >
-                <Text style={[styles.roleText, role === "caregiver" && styles.roleTextActive]}>
-                  👤 Responsable
-                </Text>
-              </Pressable>
-              <Pressable
-                style={[styles.roleBtn, role === "patient" && styles.roleBtnActive]}
-                onPress={() => setRole("patient")}
-              >
-                <Text style={[styles.roleText, role === "patient" && styles.roleTextActive]}>
-                  🫶 Paciente
-                </Text>
-              </Pressable>
-            </View>
-
-            {role === "patient" && (
+            {isPatient ? (
+              <>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Usuario del paciente"
+                  value={username}
+                  onChangeText={setUsername}
+                  autoCapitalize="none"
+                />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Email del responsable"
+                  value={caregiverEmail}
+                  onChangeText={setCaregiverEmail}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                />
+              </>
+            ) : (
               <TextInput
                 style={styles.input}
                 placeholder="Email del responsable"
-                value={caregiverEmail}
-                onChangeText={setCaregiverEmail}
+                value={email}
+                onChangeText={setEmail}
                 keyboardType="email-address"
                 autoCapitalize="none"
               />
             )}
           </>
+        ) : (
+          <TextInput
+            style={styles.input}
+            placeholder={loginPlaceholder}
+            value={identifier}
+            onChangeText={setIdentifier}
+            keyboardType={isPatient ? "default" : "email-address"}
+            autoCapitalize="none"
+          />
         )}
 
-        <TextInput
-          style={styles.input}
-          placeholder="Email"
-          value={email}
-          onChangeText={setEmail}
-          keyboardType="email-address"
-          autoCapitalize="none"
-        />
         <TextInput
           style={styles.input}
           placeholder="Contraseña"

@@ -4,7 +4,7 @@ Speech-to-Text service using faster-whisper with CUDA acceleration.
 faster-whisper bundles silero-vad via ``vad_filter=True``: non-speech regions
 are trimmed *before* decoding, which removes the vast majority of Whisper
 hallucinations on silence (no more "Gracias por ver el vídeo" etc.).
-The legacy phrase/timestamp/repetition filter is kept as a cheap safety net.
+A small phrase/timestamp/repetition filter catches residual hallucinations.
 """
 
 import logging

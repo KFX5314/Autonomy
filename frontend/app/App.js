@@ -49,8 +49,6 @@ export default function App() {
     })();
   }, []);
 
-  // Global logout: called from any screen that holds a reference. It clears
-  // SecureStore + the in-memory token and pops the caller back to Login.
   const makeLogout = useCallback((navigation) => async () => {
     await clearSession();
     setInitialUser(null);

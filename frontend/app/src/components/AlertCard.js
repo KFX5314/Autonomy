@@ -1,13 +1,3 @@
-/**
- * Expandable caregiver alert card with transcript viewer + audio playback.
- *
- * Design:
- * - Collapsed: unchanged from the previous layout (patient, severity, reason,
- *   LLM reply, timestamp + optional ACK button).
- * - Expanded: shows the speaker-tagged transcript (colored [PACIENTE]/[OTRO]
- *   blocks) and, if audio is archived, a "Reproducir audio" toggle that uses
- *   expo-av Audio.Sound. Authorization header is attached via initialStatus.
- */
 import React, { useState, useRef, useEffect } from "react";
 import { View, Text, Pressable, StyleSheet, Alert } from "react-native";
 import { Audio } from "expo-av";
@@ -15,19 +5,19 @@ import { getAlertAudioUrl, getAuthHeader } from "../services/api";
 
 function renderTaggedTranscript(text) {
   if (!text) return null;
-  // Split by speaker tags, preserving them in the output.
-  const parts = text.split(/(\[PACIENTE\]|\[OTRO\])/g).filter((p) => p.trim());
+  const parts = text
+    .split(/(\[PACIENTE\?\]|\[PACIENTE\]|\[OTRO\]|\[ASSISTANT\])/g)
+    .filter((p) => p.trim());
   const blocks = [];
   let currentTag = null;
   for (const part of parts) {
-    if (part === "[PACIENTE]" || part === "[OTRO]") {
+    if (part === "[PACIENTE]" || part === "[PACIENTE?]" || part === "[OTRO]" || part === "[ASSISTANT]") {
       currentTag = part;
       continue;
     }
     blocks.push({ tag: currentTag, text: part.trim() });
   }
   if (!blocks.length) {
-    // Transcript has no tags — render as single block.
     return <Text style={styles.transcriptPlain}>{text}</Text>;
   }
   return blocks.map((b, i) => (
@@ -35,7 +25,13 @@ function renderTaggedTranscript(text) {
       key={i}
       style={[
         styles.transcriptBlock,
-        b.tag === "[PACIENTE]" ? styles.transcriptPatient : styles.transcriptOther,
+        b.tag === "[PACIENTE]"
+          ? styles.transcriptPatient
+          : b.tag === "[PACIENTE?]"
+            ? styles.transcriptMaybePatient
+            : b.tag === "[ASSISTANT]"
+              ? styles.transcriptAssistant
+              : styles.transcriptOther,
       ]}
     >
       <Text style={styles.transcriptTag}>{b.tag || ""}</Text>
@@ -50,7 +46,6 @@ export default function AlertCard({ alert, patientName, isNew, onAck }) {
   const [loadingAudio, setLoadingAudio] = useState(false);
   const soundRef = useRef(null);
 
-  // Unload sound when unmounting or collapsing.
   useEffect(() => {
     return () => {
       if (soundRef.current) {
@@ -192,6 +187,8 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   transcriptPatient: { backgroundColor: "#E8F1FB" },
+  transcriptMaybePatient: { backgroundColor: "#FFF5D9" },
+  transcriptAssistant: { backgroundColor: "#ECE8FB" },
   transcriptOther: { backgroundColor: "#F3F3F3" },
   transcriptTag: { fontSize: 11, fontWeight: "700", color: "#666", marginBottom: 2 },
   transcriptText: { fontSize: 14, color: "#222" },

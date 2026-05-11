@@ -78,7 +78,7 @@ def _response_segments(segments: list[dict]) -> list[dict]:
     out: list[dict] = []
     for s in segments:
         item = {"start": s["start"], "end": s["end"]}
-        for key in ("speaker", "speaker_similarity", "speaker_confidence"):
+        for key in ("speaker", "speaker_similarity", "speaker_threshold", "speaker_uncertain_threshold", "speaker_confidence"):
             if key in s:
                 item[key] = s[key]
         out.append(item)
@@ -134,22 +134,12 @@ async def process_audio_chunk(
     db: Session = Depends(get_db),
     user: User = Depends(require_patient),
 ):
-    """
-    Receive an audio chunk from the patient app.
-    1. Save temp file
-    2. Transcribe with Whisper
-    3. Run episode detection
-    4. Store transcript + alert if needed
-    5. Return result to app
-    """
     _validate_audio_mime(file)
 
-    # Get patient profile
     patient = db.query(Patient).filter(Patient.user_id == user.id).first()
     if not patient:
         raise HTTPException(status_code=404, detail="Patient profile not found")
 
-    # Save uploaded audio to temp file
     suffix = os.path.splitext(file.filename or "audio.wav")[1] or ".wav"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         content = await file.read()
@@ -162,7 +152,6 @@ async def process_audio_chunk(
                 print(f"\n\033[96m{'='*60}\033[0m")
                 print(f"\033[96m  >> AUDIO RECIBIDO {datetime.now().strftime('%H:%M:%S.%f')[:-3]}\033[0m")
 
-                # 0. Check audio duration -- reject files > 30s
                 MAX_AUDIO_SECONDS = 30
                 audio_duration = None
                 try:
@@ -182,7 +171,6 @@ async def process_audio_chunk(
                 except Exception as e:
                     logger.warning(f"Could not probe audio duration: {e}")
 
-                # 1. Transcribe (with segment timestamps)
                 now = datetime.now(timezone.utc)
                 t_stt_start = time.time()
                 stt_result = transcribe_audio(tmp_path, audio_duration=audio_duration)
@@ -201,9 +189,8 @@ async def process_audio_chunk(
 
                 print(f"\033[96m  [TXT] {transcript_text}\033[0m")
 
-                # 1b. Recognize leaked app TTS before speaker verification.
-                # The transcript is still stored because [ASSISTANT] is useful
-                # short-term context, but it must never fire an alert.
+                # Recognize leaked app TTS before speaker verification so it
+                # cannot trigger alerts.
                 is_assistant_echo = False
                 t_diar_start = time.time()
                 echo_match = detect_tts_echo(transcript_text, recent_tts_text, recent_tts_age_ms)
@@ -233,8 +220,8 @@ async def process_audio_chunk(
                 t_diar_end = time.time()
                 print(f"\033[96m  >> DIARIZACION:    {t_diar_end - t_diar_start:.2f}s\033[0m")
 
-                # 2. Store transcript. Assistant echo chunks are stored unless
-                # the same assistant reply was already persisted when generated.
+                # Avoid storing the same assistant reply twice when TTS leaks
+                # back into the microphone.
                 duplicate_assistant_echo = is_assistant_echo and _has_recent_assistant_transcript(
                     db,
                     patient.id,
@@ -271,7 +258,6 @@ async def process_audio_chunk(
                         segments=_response_segments(segments),
                     )
 
-                # 3. Episode detection (with short-term memory injected for context)
                 ctx = db.query(PatientContext).filter(PatientContext.patient_id == patient.id).first()
                 context_data = ctx.context_json if ctx else {}
 
@@ -279,8 +265,6 @@ async def process_audio_chunk(
                 if stm:
                     print(f"\033[96m  [STM] {stm.count(chr(10)) + 1} utterance(s), {len(stm)} chars\033[0m")
 
-                # 3a. Wake-word shortcut: if the patient says a configured
-                # wake word, skip the episode detector and answer the query.
                 wake_words = [w.lower() for w in context_data.get("assistant_wake_words", []) if isinstance(w, str) and w.strip()]
                 patient_only_text = _extract_patient_text(transcript_text).lower()
                 triggered_wake = next((w for w in wake_words if w and w in patient_only_text), None)
@@ -288,19 +272,10 @@ async def process_audio_chunk(
                 if triggered_wake:
                     from ..services.assistant_service import answer_patient_query
 
-                    # Build the full question for the LLM by combining:
-                    # 1. The current transcript (full, including [OTRO] context)
-                    # 2. The patient's own text from this chunk (after removing
-                    #    the wake word itself so it doesn't confuse the LLM)
-                    # The STM is also passed and injected into the prompt by
-                    # answer_patient_query, giving the LLM the recent
-                    # conversation history to answer questions like
-                    # "what time did I have to buy bread?"
+                    # Keep the full transcript for context, but remove the
+                    # wake word from the direct question.
                     query_text = patient_only_text.replace(triggered_wake, "").strip()
                     if not query_text:
-                        # The wake word was the only thing said — use the full
-                        # transcript (which may include [OTRO] lines giving
-                        # context) so the LLM still has something to work with.
                         query_text = transcript_text.strip()
 
                     t_llm_start = time.time()
@@ -352,8 +327,7 @@ async def process_audio_chunk(
                     db.flush()
                     alert_id = alert.id
 
-                    # Archive the audio so the caregiver can replay the episode.
-                    # On failure we swallow: the alert is still useful without audio.
+                    # Audio replay is useful but not required for the alert.
                     try:
                         patient_dir = os.path.join(config.ALERTS_AUDIO_DIR, str(patient.id))
                         os.makedirs(patient_dir, exist_ok=True)
@@ -371,7 +345,6 @@ async def process_audio_chunk(
 
                 db.commit()
 
-                # --- Debug: show result ---
                 if result.is_episode:
                     print(f"\033[91m  [ALERTA] SI (severidad {result.severity})\033[0m")
                     print(f"\033[91m     Razon: {result.reason}\033[0m")
@@ -382,8 +355,6 @@ async def process_audio_chunk(
                 print(f"\033[96m  >> TOTAL:          {time.time() - t0:.2f}s\033[0m")
                 print(f"\033[96m{'='*60}\033[0m\n")
 
-                # 4. Fire-and-forget: condense the STM buffer into a journal entry.
-                # Gated per-patient so it runs at most every JOURNAL_INTERVAL_MINUTES.
                 if should_schedule_journal(patient.id):
                     background_tasks.add_task(summarize_and_append, patient.id)
 

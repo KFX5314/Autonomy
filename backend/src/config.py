@@ -103,7 +103,7 @@ class Config:
     DB_PASSWORD: str = field(default_factory=lambda: os.getenv("DB_PASSWORD", DEV_DB_PASSWORD))
 
     # JWT. In production, JWT_SECRET MUST be set via environment. The dev
-    # default is obviously insecure and server.py rejects it when PRODUCTION=1.
+    # server.py rejects the development secret when PRODUCTION=1.
     JWT_SECRET: str = field(default_factory=lambda: os.getenv("JWT_SECRET", DEV_JWT_SECRET))
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int = field(default_factory=lambda: int(os.getenv("JWT_EXPIRE_MINUTES", "1440")))
@@ -141,6 +141,7 @@ class Config:
     # so we default to CPU to keep CUDA VRAM free for Whisper + LLM.
     SPEAKER_DEVICE: str = field(default_factory=lambda: os.getenv("SPEAKER_DEVICE", "cpu"))
     SPEAKER_DIARIZATION_THRESHOLD: float = field(default_factory=lambda: float(os.getenv("SPEAKER_DIARIZATION_THRESHOLD", "0.40")))
+    SPEAKER_UNCERTAIN_THRESHOLD: float = field(default_factory=lambda: float(os.getenv("SPEAKER_UNCERTAIN_THRESHOLD", "0.30")))
 
     # Assistant TTS echo recognition. The patient app sends the most recent TTS
     # text as a hint; the backend still requires a strong transcript match.

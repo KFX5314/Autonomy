@@ -1,13 +1,8 @@
 """
 Speaker identification using SpeechBrain ECAPA-TDNN.
 
-Runs fully locally (public HF model, no auth token). Produces 192-dim
-embeddings with better speaker separation than Resemblyzer's 256-dim
-voice encoder.
-
-Embeddings from the old Resemblyzer encoder (256-dim) are detected at
-runtime and ignored with a warning — caregivers must re-record the voice
-sample once after migrating to this stack.
+Runs fully locally with SpeechBrain's public ECAPA model and stores
+192-dimensional embeddings for patient voice matching.
 """
 
 import logging
@@ -26,16 +21,16 @@ from ..config import config
 
 logger = logging.getLogger(__name__)
 
-# Expected embedding dimensionality for the ECAPA-TDNN model we use.
+# ECAPA-TDNN model constants.
 EMBEDDING_DIM = 192
 SAMPLE_RATE = 16000
 MIN_SAMPLES = SAMPLE_RATE  # 1 s of audio is the minimum for a reliable embedding
 MIN_ENROLLMENT_SPEECH_SAMPLES = SAMPLE_RATE * 3
 MAX_VOICE_SAMPLES = 10
 
-# Diarization similarity threshold for ECAPA-TDNN embeddings.
-# 0.40 allows for natural variations in speech or microphone distance.
+# Similarity thresholds for patient and possible-patient labels.
 DIARIZATION_THRESHOLD = config.SPEAKER_DIARIZATION_THRESHOLD
+UNCERTAIN_THRESHOLD = config.SPEAKER_UNCERTAIN_THRESHOLD
 LOW_CONFIDENCE_MARGIN = 0.08
 
 # Model cache directory (kept out of site-packages so we can wipe/reset it).
@@ -135,6 +130,14 @@ def _speaker_confidence(similarity: float, threshold: float) -> str:
     return "low" if abs(similarity - threshold) <= LOW_CONFIDENCE_MARGIN else "high"
 
 
+def _speaker_label(similarity: float, threshold: float, uncertain_threshold: float) -> tuple[str, str]:
+    if similarity >= threshold:
+        return "PACIENTE", _speaker_confidence(similarity, threshold)
+    if similarity >= uncertain_threshold:
+        return "PACIENTE?", "uncertain"
+    return "OTRO", _speaker_confidence(similarity, uncertain_threshold)
+
+
 def _similarity_bar(similarity: float) -> str:
     clamped = max(0.0, min(1.0, similarity))
     return "█" * int(clamped * 20) + "░" * (20 - int(clamped * 20))
@@ -200,7 +203,7 @@ def _is_valid_embedding(embedding: object) -> bool:
 
 
 def _voice_samples_from_store(voice_embedding: object) -> list[dict]:
-    """Return normalized sample dicts from legacy or multi-sample storage."""
+    """Return normalized sample dicts from single-vector or multi-sample storage."""
     if _is_valid_embedding(voice_embedding):
         return [{
             "id": "legacy",
@@ -254,10 +257,10 @@ def delete_voice_sample(voice_embedding: object, sample_id: str) -> dict | None:
 
 def _average_patient_embedding(voice_embedding: object) -> np.ndarray | None:
     """
-    Resolve legacy or multi-sample storage to one normalized patient vector.
+    Resolve single-vector or multi-sample storage to one normalized patient vector.
 
     Embeddings are already normalized when created. We normalize again before
-    averaging so legacy/manual records cannot skew the centroid by magnitude.
+    averaging so imported/manual records cannot skew the centroid by magnitude.
     """
     vectors = []
     for sample in _voice_samples_from_store(voice_embedding):
@@ -358,11 +361,12 @@ def diarize_segments(
     segments: list[dict],
     patient_embedding: object,
     threshold: float = DIARIZATION_THRESHOLD,
+    uncertain_threshold: float = UNCERTAIN_THRESHOLD,
 ) -> list[dict]:
     """
     Per-segment speaker identification.
     Takes Whisper segments [{"start", "end", "text"}] and returns them
-    enriched with a "speaker" field ("PACIENTE" or "OTRO").
+    enriched with a "speaker" field ("PACIENTE", "PACIENTE?" or "OTRO").
 
     Very short segments are expanded with neighboring Whisper segments before
     embedding; if they are still too short, they inherit the previous speaker.
@@ -383,19 +387,19 @@ def diarize_segments(
         seg_wav, expanded = _expanded_segment_wav(wav, segments, index)
 
         if seg_wav.numel() < MIN_SAMPLES:
-            seg["speaker"] = last_speaker or "PACIENTE"
+            seg["speaker"] = last_speaker or "PACIENTE?"
             seg["speaker_similarity"] = None
-            seg["speaker_confidence"] = "inherited"
+            seg["speaker_confidence"] = "inherited" if last_speaker else "uncertain"
             sim_str = "---"
             tag_reason = "corto"
         else:
             seg_embedding = _embed(seg_wav)
             similarity = float(np.dot(seg_embedding, patient_emb))
-            is_patient = similarity >= threshold
-            confidence = _speaker_confidence(similarity, threshold)
-            seg["speaker"] = "PACIENTE" if is_patient else "OTRO"
+            speaker, confidence = _speaker_label(similarity, threshold, uncertain_threshold)
+            seg["speaker"] = speaker
             seg["speaker_similarity"] = similarity
             seg["speaker_threshold"] = threshold
+            seg["speaker_uncertain_threshold"] = uncertain_threshold
             seg["speaker_confidence"] = confidence
             clamped = max(0.0, min(1.0, similarity))
             bar = "█" * int(clamped * 20) + "░" * (20 - int(clamped * 20))
@@ -405,7 +409,12 @@ def diarize_segments(
 
         last_speaker = seg["speaker"]
 
-        color = "\033[92m" if seg["speaker"] == "PACIENTE" else "\033[91m"
+        if seg["speaker"] == "PACIENTE":
+            color = "\033[92m"
+        elif seg["speaker"] == "PACIENTE?":
+            color = "\033[93m"
+        else:
+            color = "\033[91m"
         rst = "\033[0m"
         time_range = f"{seg['start']:.1f}s-{seg['end']:.1f}s"
         extra = f" ({tag_reason})" if tag_reason else ""
@@ -419,6 +428,7 @@ def build_tagged_transcript(segments: list[dict]) -> str:
     """
     Merge consecutive segments by the same speaker into blocks:
     [PACIENTE] Hola buenos días...
+    [PACIENTE?] Puede que sea María...
     [OTRO] Sé que falleció...
     """
     if not segments:

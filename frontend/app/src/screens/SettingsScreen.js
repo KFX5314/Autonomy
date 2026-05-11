@@ -99,10 +99,18 @@ export default function SettingsScreen({ navigation, route }) {
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Cuenta</Text>
-          <View style={styles.row}>
-            <Text style={styles.rowLabel}>Correo</Text>
-            <Text style={styles.rowValue}>{user?.email || "—"}</Text>
-          </View>
+          {user?.username ? (
+            <View style={styles.row}>
+              <Text style={styles.rowLabel}>Usuario</Text>
+              <Text style={styles.rowValue}>{user.username}</Text>
+            </View>
+          ) : null}
+          {user?.email ? (
+            <View style={styles.row}>
+              <Text style={styles.rowLabel}>Correo</Text>
+              <Text style={styles.rowValue}>{user.email}</Text>
+            </View>
+          ) : null}
           <View style={styles.row}>
             <Text style={styles.rowLabel}>Rol</Text>
             <Text style={styles.rowValue}>

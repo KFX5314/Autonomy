@@ -11,11 +11,14 @@ USE tfg_demencia;
 -- ============================================================
 -- USERS: Both caregivers and patients authenticate here.
 -- role = 'caregiver' | 'patient'
+-- Caregivers authenticate with email. Patients authenticate with username
+-- because they may not have an email account.
 -- A patient row is linked to its caregiver via caregiver_id.
 -- ============================================================
 CREATE TABLE IF NOT EXISTS users (
     id              BIGINT          PRIMARY KEY AUTO_INCREMENT,
-    email           VARCHAR(255)    NOT NULL UNIQUE,
+    email           VARCHAR(255)    NULL UNIQUE COMMENT 'Required for caregivers; optional for patients',
+    username        VARCHAR(64)     NULL UNIQUE COMMENT 'Required for patients; optional for caregivers',
     password_hash   VARCHAR(255)    NOT NULL,
     full_name       VARCHAR(255)    NOT NULL,
     role            ENUM('caregiver','patient') NOT NULL,

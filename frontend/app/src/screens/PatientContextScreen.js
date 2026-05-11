@@ -1,6 +1,3 @@
-/**
- * Edit patient context - caregiver edits trigger phrases, risk rules, profile.
- */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   View,
@@ -32,7 +29,6 @@ export default function PatientContextScreen({ patient, onBack }) {
   const [context, setContext] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Editable fields
   const [preferredName, setPreferredName] = useState("");
   const [address, setAddress] = useState("");
   const [caregiverNames, setCaregiverNames] = useState("");
@@ -56,7 +52,6 @@ export default function PatientContextScreen({ patient, onBack }) {
     loadContext();
   }, []);
 
-  // Clean up timer on unmount
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -78,8 +73,7 @@ export default function PatientContextScreen({ patient, onBack }) {
       setUiColor(ctx.ui_color || "#4A90D9");
       setTtsEnabled(ctx.tts_enabled !== false);
 
-      // Load unified alert_phrases (merging legacy trigger_phrases + risk_rules
-      // if the backend still has those).
+      // Old saved contexts may still store trigger_phrases + risk_rules.
       let phrases = [];
       if (Array.isArray(ctx.alert_phrases) && ctx.alert_phrases.length) {
         phrases = ctx.alert_phrases.map((it) =>
@@ -178,7 +172,6 @@ export default function PatientContextScreen({ patient, onBack }) {
         useNativeDriver: false,
       }).start();
 
-      // Track progress for the text counter + auto-send at the end
       let elapsed = 0;
       timerRef.current = setInterval(() => {
         elapsed += voiceSample.tickMs;
@@ -187,7 +180,6 @@ export default function PatientContextScreen({ patient, onBack }) {
         if (elapsed >= voiceSample.durationMs) {
           clearInterval(timerRef.current);
           timerRef.current = null;
-          // Auto-send
           sendVoiceSample(recordingRef.current);
         }
       }, voiceSample.tickMs);
@@ -242,7 +234,7 @@ export default function PatientContextScreen({ patient, onBack }) {
         alert_phrases: cleanedPhrases,
         assistant_wake_words: cleanedWakeWords,
       };
-      // Drop the legacy keys so the server stores the canonical shape.
+      // Store only the unified alert_phrases shape after editing.
       delete newContext.trigger_phrases;
       delete newContext.risk_rules;
 

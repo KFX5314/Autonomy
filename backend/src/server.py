@@ -75,32 +75,51 @@ def _migrate_alert_audio_columns() -> None:
                     logger.warning(f"Migration failed ({s}): {e}")
 
 
+def _migrate_user_identifier_columns() -> None:
+    """Allow patients to authenticate by username while caregivers keep email."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    try:
+        cols = {c["name"]: c for c in insp.get_columns("users")}
+    except Exception:
+        return
+
+    stmts: list[str] = []
+    if "username" not in cols:
+        stmts.append("ALTER TABLE users ADD COLUMN username VARCHAR(64) NULL UNIQUE")
+    if "email" in cols and not cols["email"].get("nullable", True):
+        stmts.append("ALTER TABLE users MODIFY email VARCHAR(255) NULL")
+
+    if stmts:
+        with engine.begin() as conn:
+            for s in stmts:
+                try:
+                    conn.execute(text(s))
+                    logger.info(f"Migration: {s}")
+                except Exception as e:
+                    logger.warning(f"Migration failed ({s}): {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: verify production configuration safety
     _enforce_production_safety()
 
-    # Startup: create tables if they don't exist (dev convenience)
     Base.metadata.create_all(bind=engine)
+    _migrate_user_identifier_columns()
     _migrate_alert_audio_columns()
     logger.info("Database tables verified/created.")
 
-    # Sweep expired alert audio from a previous run.
     from .services.alert_audio_retention import sweep_expired_alert_audio
     sweep_expired_alert_audio()
 
-    # Pre-load all heavy models so first request is fast
     logger.info("Warming up models...")
 
-    # 1. Whisper STT
     from .services.stt_service import warmup as warmup_stt
     warmup_stt()
 
-    # 2. Resemblyzer speaker encoder
     from .services.speaker_id_service import warmup as warmup_speaker
     warmup_speaker()
 
-    # 3. Ollama: verify model is available and warm up with a tiny inference
     llm = get_llm_provider()
     if isinstance(llm, OllamaProvider):
         await llm.check_model()
@@ -113,7 +132,6 @@ async def lifespan(app: FastAPI):
 
     logger.info("All models ready. Server accepting requests.")
     yield
-    # Shutdown
     logger.info("Shutting down.")
 
 
@@ -137,7 +155,6 @@ app.add_middleware(
 # Reject oversized request bodies before they hit the handlers.
 app.add_middleware(BodySizeLimitMiddleware)
 
-# Register routers
 app.include_router(auth_router)
 app.include_router(patients_router)
 app.include_router(audio_router)

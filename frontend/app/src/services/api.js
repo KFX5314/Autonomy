@@ -1,7 +1,3 @@
-/**
- * API service - single source of truth for backend communication.
- */
-
 import appConfig from "../config/appConfig";
 
 const { api } = appConfig;
@@ -40,19 +36,20 @@ async function request(path, options = {}) {
   return text ? JSON.parse(text) : null;
 }
 
-// ─── Auth ─────────────────────────────────────────────
-export async function login(email, password) {
+// Auth
+export async function login(identifier, password, role) {
   return request("/auth/login", {
     method: "POST",
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ identifier, password, role }),
   });
 }
 
-export async function register(email, password, fullName, role, caregiverEmail) {
+export async function register({ email, username, password, fullName, role, caregiverEmail }) {
   return request("/auth/register", {
     method: "POST",
     body: JSON.stringify({
-      email,
+      email: email || null,
+      username: username || null,
       password,
       full_name: fullName,
       role,
@@ -65,7 +62,7 @@ export async function getCurrentUser() {
   return request("/auth/me");
 }
 
-// ─── Patients (caregiver) ─────────────────────────────
+// Patients
 export async function getPatients() {
   return request("/patients/");
 }
@@ -92,7 +89,7 @@ export async function sendPatientLogoutWarning() {
   });
 }
 
-// ─── Journal (caregiver) ─────────────────────────────
+// Journal and memory
 export async function getPatientJournal(patientId, sinceHours = 24, limit = 100) {
   return request(`/patients/${patientId}/journal?since_hours=${sinceHours}&limit=${limit}`);
 }
@@ -111,7 +108,7 @@ export async function deleteVoiceSample(patientId, sampleId) {
   });
 }
 
-// ─── Alerts (caregiver) ──────────────────────────────
+// Alerts
 export async function getAlerts(patientId, status) {
   let path = "/alerts/";
   const params = [];
@@ -128,8 +125,7 @@ export async function ackAlert(alertId, status = "ACK") {
   });
 }
 
-// Full URL for the alert audio endpoint. Caller must pass the token as a
-// header (Audio.Sound on expo-av accepts headers via the second argument).
+// Audio.Sound accepts auth headers when loading protected alert audio.
 export function getAlertAudioUrl(alertId) {
   return `${api.baseUrl}/alerts/${alertId}/audio`;
 }
@@ -138,7 +134,7 @@ export function getAuthHeader() {
   return _token ? { Authorization: `Bearer ${_token}` } : {};
 }
 
-// ─── Audio (patient) ─────────────────────────────────
+// Audio upload
 
 async function _sendAudioChunkOnce(uri, metadata = {}) {
   const form = new FormData();
@@ -165,7 +161,7 @@ async function _sendAudioChunkOnce(uri, metadata = {}) {
   const timer = setTimeout(() => controller.abort(), api.audioChunkTimeoutMs);
 
   try {
-    // Do NOT set Content-Type manually — fetch auto-generates the boundary for FormData
+    // Let fetch generate the multipart boundary.
     const res = await fetch(`${api.baseUrl}/audio/chunk`, {
       method: "POST",
       body: form,
@@ -188,14 +184,13 @@ export async function sendAudioChunk(uri, metadata = {}) {
     } catch (e) {
       const isLast = attempt >= api.audioChunkMaxRetries;
       if (isLast) throw e;
-      // Transient failure — wait briefly then retry
       console.warn(`[API] Audio chunk attempt ${attempt + 1} failed: ${e.message} — retrying...`);
       await new Promise((r) => setTimeout(r, api.audioChunkRetryDelayMs));
     }
   }
 }
 
-// ─── Voice enrollment (caregiver) ────────────────────
+// Voice enrollment
 export async function uploadVoiceSample(patientId, uri) {
   const form = new FormData();
   form.append("file", {
@@ -220,7 +215,7 @@ export async function uploadVoiceSample(patientId, uri) {
   return JSON.parse(text);
 }
 
-// ─── Health ──────────────────────────────────────────
+// Health
 export async function healthCheck() {
   return request("/health");
 }

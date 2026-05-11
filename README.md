@@ -72,7 +72,7 @@ flowchart LR
 
 ## Funcionalidades principales
 
-- Registro e inicio de sesión con roles `caregiver` y `patient`.
+- Registro e inicio de sesión con roles `caregiver` y `patient`: el responsable usa email y el paciente usa nombre de usuario.
 - Vinculación paciente-cuidador mediante el email del cuidador durante el registro del paciente.
 - Captura de audio en la app paciente con segmentación local por silencio.
 - Envío de chunks de audio al backend como archivos `.m4a` mediante `multipart/form-data`.
@@ -80,7 +80,7 @@ flowchart LR
 - Detección de episodios mediante frases de alerta, expresiones regulares, contexto del paciente y LLM.
 - Asistente por palabras de activación configurables, sin crear alerta.
 - Respuesta por voz al paciente con `expo-speech`.
-- Registro de muestra de voz, diarización paciente/no paciente y etiquetado `[ASSISTANT]` para eco TTS.
+- Registro de muestra de voz, diarización paciente/no paciente, etiqueta dudosa `[PACIENTE?]` y etiquetado `[ASSISTANT]` para eco TTS.
 - Gestión de alertas con transcripción, refresco automático, audio archivado y ACK del cuidador.
 - Diario de memoria a largo plazo y vista avanzada de memoria a corto plazo para el cuidador.
 - Endurecimiento básico de seguridad: JWT, roles, límite de request, retención de audio y checks de producción.
@@ -206,7 +206,7 @@ Si el `.env` conserva una URL `http://100.x.y.z:8000` y Tailscale no está activ
 ## Flujo de prueba completo
 
 1. Registra un cuidador desde la pantalla de login: `Regístrate` -> `Responsable`.
-2. Cierra sesión y registra un paciente: `Regístrate` -> `Paciente` -> introduce el email del cuidador.
+2. Cierra sesión y registra un paciente: `Regístrate` -> `Paciente` -> introduce un usuario para el paciente y el email del cuidador.
 3. Inicia sesión como cuidador y abre el paciente vinculado.
 4. Edita el contexto:
    - perfil del paciente;
@@ -348,6 +348,7 @@ TFG-DEMENCIA/
 | `STT_INITIAL_PROMPT` | Prompt en español | Prompt inicial para Whisper |
 | `SPEAKER_DEVICE` | `cpu` | Dispositivo para SpeechBrain |
 | `SPEAKER_DIARIZATION_THRESHOLD` | `0.40` | Umbral de similitud para etiquetar `[PACIENTE]` |
+| `SPEAKER_UNCERTAIN_THRESHOLD` | `0.30` | Umbral inferior para etiquetar `[PACIENTE?]` |
 | `TTS_ECHO_MATCH_WINDOW_MS` | `30000` | Ventana para reconocer eco TTS reciente |
 | `TTS_ECHO_MATCH_RATIO` | `0.82` | Similitud mínima para etiquetar `[ASSISTANT]` |
 | `TTS_ECHO_MIN_CHARS` | `12` | Longitud mínima para comparar eco TTS |
@@ -434,6 +435,8 @@ La documentación interactiva completa está disponible en `/docs` cuando el bac
 | `POST` | `/alerts/{id}/ack` | Cuidador | Aceptar alerta |
 | `GET` | `/health` | Público | Estado backend/LLM |
 
+En autenticación, el responsable se registra e inicia sesión con email. El paciente se registra con `username` y el email de su responsable, e inicia sesión seleccionando rol `Paciente` y usando ese usuario.
+
 ## Decisiones de diseño
 
 ### ¿Por qué una sola app con dos roles?
@@ -464,8 +467,9 @@ La documentación interactiva completa está disponible en `/docs` cuando el bac
 ### ¿Por qué SpeechBrain para diarización?
 
 - La muestra de voz permite crear un embedding local del paciente.
-- Cada segmento se compara contra ese embedding para etiquetar `[PACIENTE]` u `[OTRO]`; si coincide con una respuesta TTS reciente de la app, se etiqueta `[ASSISTANT]`.
-- Las reglas se aplican sobre texto del paciente cuando hay diarización disponible, reduciendo falsas alertas por frases dichas por otra persona.
+- Cada segmento se compara contra ese embedding para etiquetar `[PACIENTE]`, `[PACIENTE?]` u `[OTRO]`; si coincide con una respuesta TTS reciente de la app, se etiqueta `[ASSISTANT]`.
+- `[PACIENTE?]` indica identificación dudosa: no dispara reglas deterministas, pero el LLM la recibe como contexto con cautela.
+- Las reglas se aplican sobre texto `[PACIENTE]` cuando hay diarización disponible, reduciendo falsas alertas por frases dichas por otra persona.
 
 ### ¿Por qué memoria STM/LTM?
 

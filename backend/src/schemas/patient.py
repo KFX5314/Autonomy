@@ -6,6 +6,7 @@ class PatientOut(BaseModel):
     id: int
     user_id: int
     full_name: str
+    username: str | None = None
     birth_date: date | None = None
     notes: str | None = None
     created_at: datetime | None = None
