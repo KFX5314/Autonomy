@@ -334,7 +334,7 @@ TFG-DEMENCIA/
 | `DB_PASSWORD` | `tfg_pass_2024` *(dev)* | **OBLIGATORIO cambiar en producción** |
 | `JWT_SECRET` | `dev-only-insecure-secret` *(dev)* | **OBLIGATORIO cambiar en producción** |
 | `JWT_EXPIRE_MINUTES` | `1440` | Expiración de tokens |
-| `CORS_ORIGINS` | `http://localhost:19000,http://localhost:19006,http://localhost:8081` | Allowlist CSV para clientes web/dev |
+| `CORS_ORIGINS` | <p>`http://localhost:19000`<br>`http://localhost:19006`<br>`http://localhost:8081`<p> | Allowlist CSV para clientes web/dev |
 | `MAX_BODY_BYTES` | `52428800` | Tamaño máximo de request |
 | `MAX_CONCURRENT_AUDIO` | `5` | Máximo de chunks procesados simultáneamente |
 | `STT_MODEL` | `medium` | Modelo `faster-whisper` |
