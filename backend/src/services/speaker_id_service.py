@@ -15,6 +15,8 @@ import subprocess
 import tempfile
 import threading
 import os
+import uuid
+from datetime import datetime, timezone
 
 import numpy as np
 import torch
@@ -29,6 +31,7 @@ EMBEDDING_DIM = 192
 SAMPLE_RATE = 16000
 MIN_SAMPLES = SAMPLE_RATE  # 1 s of audio is the minimum for a reliable embedding
 MIN_ENROLLMENT_SPEECH_SAMPLES = SAMPLE_RATE * 3
+MAX_VOICE_SAMPLES = 10
 
 # Diarization similarity threshold for ECAPA-TDNN embeddings.
 # 0.40 allows for natural variations in speech or microphone distance.
@@ -186,16 +189,104 @@ def create_embedding(audio_path: str) -> list[float]:
     return embedding.tolist()
 
 
-def _check_embedding_version(patient_embedding: list[float]) -> bool:
+def _is_valid_embedding(embedding: object) -> bool:
+    if not isinstance(embedding, list) or len(embedding) != EMBEDDING_DIM:
+        return False
+    try:
+        np.array(embedding, dtype=np.float32)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _voice_samples_from_store(voice_embedding: object) -> list[dict]:
+    """Return normalized sample dicts from legacy or multi-sample storage."""
+    if _is_valid_embedding(voice_embedding):
+        return [{
+            "id": "legacy",
+            "created_at": None,
+            "embedding": voice_embedding,
+        }]
+
+    if isinstance(voice_embedding, dict):
+        samples = voice_embedding.get("samples", [])
+        if isinstance(samples, list):
+            return [
+                s for s in samples
+                if isinstance(s, dict) and _is_valid_embedding(s.get("embedding"))
+            ]
+    return []
+
+
+def list_voice_samples(voice_embedding: object) -> list[dict]:
+    """Return caregiver-safe metadata for stored voice samples."""
+    return [
+        {
+            "id": str(sample.get("id") or "legacy"),
+            "created_at": sample.get("created_at"),
+            "embedding_size": len(sample.get("embedding") or []),
+        }
+        for sample in _voice_samples_from_store(voice_embedding)
+    ]
+
+
+def append_voice_sample(voice_embedding: object, embedding: list[float]) -> dict:
+    """Add a voice sample and keep only the most recent MAX_VOICE_SAMPLES."""
+    samples = _voice_samples_from_store(voice_embedding)
+    samples.append({
+        "id": str(uuid.uuid4()),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "embedding": embedding,
+    })
+    samples = samples[-MAX_VOICE_SAMPLES:]
+    return {"samples": samples}
+
+
+def delete_voice_sample(voice_embedding: object, sample_id: str) -> dict | None:
+    samples = [
+        sample for sample in _voice_samples_from_store(voice_embedding)
+        if str(sample.get("id") or "legacy") != sample_id
+    ]
+    if not samples:
+        return None
+    return {"samples": samples[-MAX_VOICE_SAMPLES:]}
+
+
+def _average_patient_embedding(voice_embedding: object) -> np.ndarray | None:
     """
-    Validate that the stored embedding matches the current encoder.
-    Returns False (with a warning) for legacy Resemblyzer (256-dim) embeddings.
+    Resolve legacy or multi-sample storage to one normalized patient vector.
+
+    Embeddings are already normalized when created. We normalize again before
+    averaging so legacy/manual records cannot skew the centroid by magnitude.
     """
-    if len(patient_embedding) != EMBEDDING_DIM:
+    vectors = []
+    for sample in _voice_samples_from_store(voice_embedding):
+        emb = np.array(sample["embedding"], dtype=np.float32)
+        norm = np.linalg.norm(emb)
+        if norm > 0:
+            vectors.append(emb / norm)
+
+    if not vectors:
+        if isinstance(voice_embedding, list):
+            logger.warning(
+                f"Stored voice embedding has {len(voice_embedding)} dims but the "
+                f"current encoder expects {EMBEDDING_DIM}. The patient must re-record "
+                "their voice sample."
+            )
+        return None
+
+    centroid = np.mean(vectors, axis=0)
+    norm = np.linalg.norm(centroid)
+    if norm > 0:
+        centroid = centroid / norm
+    return centroid.astype(np.float32)
+
+
+def _check_embedding_version(patient_embedding: object) -> bool:
+    """Validate that at least one stored embedding matches the current encoder."""
+    if _average_patient_embedding(patient_embedding) is None:
         logger.warning(
-            f"Stored voice embedding has {len(patient_embedding)} dims but the "
-            f"current encoder expects {EMBEDDING_DIM}. The patient must re-record "
-            "their voice sample."
+            "No valid ECAPA-TDNN voice samples available for speaker verification."
         )
         return False
     return True
@@ -203,14 +294,15 @@ def _check_embedding_version(patient_embedding: list[float]) -> bool:
 
 def identify_speaker(
     audio_path: str,
-    patient_embedding: list[float],
+    patient_embedding: object,
     threshold: float = DIARIZATION_THRESHOLD,
 ) -> bool:
     """
     Compare an entire audio chunk against the stored patient embedding.
     Returns True if the speaker is likely the patient.
     """
-    if not _check_embedding_version(patient_embedding):
+    patient_emb = _average_patient_embedding(patient_embedding)
+    if patient_emb is None:
         return False
 
     wav = _load_wav(audio_path)
@@ -218,7 +310,6 @@ def identify_speaker(
         return False
 
     chunk_embedding = _embed(wav)
-    patient_emb = np.array(patient_embedding, dtype=np.float32)
     similarity = float(np.dot(chunk_embedding, patient_emb))
 
     match = similarity >= threshold
@@ -265,7 +356,7 @@ def _expanded_segment_wav(wav: torch.Tensor, segments: list[dict], index: int) -
 def diarize_segments(
     audio_path: str,
     segments: list[dict],
-    patient_embedding: list[float],
+    patient_embedding: object,
     threshold: float = DIARIZATION_THRESHOLD,
 ) -> list[dict]:
     """
@@ -276,7 +367,8 @@ def diarize_segments(
     Very short segments are expanded with neighboring Whisper segments before
     embedding; if they are still too short, they inherit the previous speaker.
     """
-    if not _check_embedding_version(patient_embedding):
+    patient_emb = _average_patient_embedding(patient_embedding)
+    if patient_emb is None:
         for seg in segments:
             seg["speaker"] = "OTRO"
             seg["speaker_similarity"] = None
@@ -284,7 +376,6 @@ def diarize_segments(
         return segments
 
     wav = _load_wav(audio_path)
-    patient_emb = np.array(patient_embedding, dtype=np.float32)
 
     print()
     last_speaker: str | None = None

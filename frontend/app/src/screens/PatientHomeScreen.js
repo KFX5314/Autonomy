@@ -9,8 +9,10 @@ import React, { useRef, useState, useEffect, useCallback } from "react";
 import { View, Text, Pressable, StyleSheet, Alert, AppState } from "react-native";
 import { Audio } from "expo-av";
 import * as Speech from "expo-speech";
+import { useFocusEffect } from "@react-navigation/native";
 import appConfig from "../config/appConfig";
-import { sendAudioChunk } from "../services/api";
+import { getMyPatientSettings, sendAudioChunk } from "../services/api";
+import { loadPatientTtsEnabled } from "../services/session";
 
 /* ── VAD tuning knobs ─────────────────────────────────────── */
 const { patientVad, tts } = appConfig;
@@ -19,12 +21,35 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
   const [listening, setListening] = useState(false);
   const [status, setStatus] = useState("Listo");
   const [lastReply, setLastReply] = useState(null);
+  const [caregiverTtsEnabled, setCaregiverTtsEnabled] = useState(true);
+  const [localTtsEnabled, setLocalTtsEnabled] = useState(true);
   const recordingRef  = useRef(null);
   const abortRef      = useRef(null);
   const listeningRef  = useRef(false);
   const thresholdRef  = useRef(patientVad.defaultThresholdDb);  // calibrated threshold, persists across chunks
   const meteringRef   = useRef([]);                  // [{t: seconds, dB: number}] for current chunk
   const recentTtsRef  = useRef(null);                // { text, markedAt } for assistant echo tagging
+  const userId = user?.user_id || user?.id;
+  const ttsPlaybackEnabled = caregiverTtsEnabled && localTtsEnabled;
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      (async () => {
+        const localEnabled = await loadPatientTtsEnabled(userId);
+        if (active) setLocalTtsEnabled(localEnabled);
+        try {
+          const settings = await getMyPatientSettings();
+          if (active) setCaregiverTtsEnabled(settings.tts_enabled !== false);
+        } catch (e) {
+          console.warn("Could not load patient TTS settings:", e?.message || e);
+        }
+      })();
+      return () => {
+        active = false;
+      };
+    }, [userId])
+  );
 
   /* ── start a metering-enabled recording ─────────────────── */
   const startRecording = async () => {
@@ -74,6 +99,7 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
   const speakReply = useCallback((text, rate) => {
     if (!text) return;
     setLastReply(text);
+    if (!ttsPlaybackEnabled) return;
     markRecentTts(text);
     Speech.speak(text, {
       language: tts.language,
@@ -83,7 +109,7 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
       onStopped: () => markRecentTts(text),
       onError: () => markRecentTts(text),
     });
-  }, [markRecentTts]);
+  }, [markRecentTts, ttsPlaybackEnabled]);
 
   const stopAndSend = async () => {
     const recording = recordingRef.current;

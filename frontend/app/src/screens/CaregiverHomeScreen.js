@@ -15,6 +15,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import appConfig from "../config/appConfig";
 import {
   getPatients,
+  getPatientContext,
   getAlerts,
   ackAlert,
   getPatientJournal,
@@ -23,6 +24,15 @@ import {
 import AlertCard from "../components/AlertCard";
 
 const { caregiver } = appConfig;
+
+function PatientActionButton({ icon, label, onPress, color }) {
+  return (
+    <Pressable style={[styles.patientActionBtn, { borderColor: color }]} onPress={onPress}>
+      <Text style={[styles.patientActionIcon, { color }]}>{icon}</Text>
+      <Text style={styles.patientActionLabel}>{label}</Text>
+    </Pressable>
+  );
+}
 
 export default function CaregiverHomeScreen({ user, onLogout, onEditContext, onOpenSettings }) {
   const [patients, setPatients] = useState([]);
@@ -41,7 +51,20 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext, onO
     if (showSpinner) setRefreshing(true);
     try {
       const [p, a] = await Promise.all([getPatients(), getAlerts()]);
-      setPatients(p);
+      const enrichedPatients = await Promise.all(
+        p.map(async (patient) => {
+          try {
+            const context = await getPatientContext(patient.id);
+            return {
+              ...patient,
+              ui_color: context.context_json?.ui_color || "#4A90D9",
+            };
+          } catch {
+            return { ...patient, ui_color: "#4A90D9" };
+          }
+        })
+      );
+      setPatients(enrichedPatients);
       setAlerts(a);
       setLoaded(true);
     } catch (e) {
@@ -156,18 +179,27 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext, onO
           showsHorizontalScrollIndicator={false}
           style={styles.patientList}
           renderItem={({ item }) => (
-            <View style={styles.patientCard}>
+            <View style={[styles.patientCard, { borderLeftColor: item.ui_color || "#4A90D9" }]}>
               <Text style={styles.patientName}>{item.full_name}</Text>
               <View style={styles.patientActions}>
-                <Pressable onPress={() => onEditContext(item)}>
-                  <Text style={styles.patientSub}>Editar contexto</Text>
-                </Pressable>
-                <Pressable onPress={() => openPatientDetail(item, "journal")}>
-                  <Text style={styles.patientSub}>Ver diario</Text>
-                </Pressable>
-                <Pressable onPress={() => openPatientDetail(item, "advanced")}>
-                  <Text style={styles.patientSub}>Avanzado</Text>
-                </Pressable>
+                <PatientActionButton
+                  icon="⚙"
+                  label="Configuración"
+                  color={item.ui_color || "#4A90D9"}
+                  onPress={() => onEditContext(item)}
+                />
+                <PatientActionButton
+                  icon="▤"
+                  label="Diario"
+                  color={item.ui_color || "#4A90D9"}
+                  onPress={() => openPatientDetail(item, "journal")}
+                />
+                <PatientActionButton
+                  icon="⋯"
+                  label="Avanzado"
+                  color={item.ui_color || "#4A90D9"}
+                  onPress={() => openPatientDetail(item, "advanced")}
+                />
               </View>
             </View>
           )}
@@ -318,19 +350,31 @@ const styles = StyleSheet.create({
   sectionRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 16, marginBottom: 10 },
   sectionTitle: { fontSize: 18, fontWeight: "700" },
   empty: { color: "#999", marginBottom: 10 },
-  patientList: { marginBottom: 8, maxHeight: 126 },
+  patientList: { marginBottom: 8, maxHeight: 196 },
   patientCard: {
     backgroundColor: "#fff",
     borderRadius: 14,
     padding: 14,
     marginRight: 12,
-    minWidth: 170,
+    minWidth: 230,
     borderWidth: 1,
     borderColor: "#E0E0E0",
+    borderLeftWidth: 6,
   },
   patientName: { fontSize: 16, fontWeight: "700" },
-  patientActions: { marginTop: 4, gap: 3 },
-  patientSub: { fontSize: 13, color: "#4A90D9", marginTop: 3 },
+  patientActions: { marginTop: 10, gap: 8 },
+  patientActionBtn: {
+    minHeight: 38,
+    borderRadius: 10,
+    borderWidth: 1,
+    backgroundColor: "#FAFCFF",
+    paddingHorizontal: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  patientActionIcon: { width: 22, textAlign: "center", fontSize: 16, fontWeight: "700" },
+  patientActionLabel: { fontSize: 14, color: "#222", fontWeight: "700" },
   tabRow: {
     flexDirection: "row",
     backgroundColor: "#E9EEF5",

@@ -14,11 +14,18 @@ from ..database import get_db
 from ..models.user import User
 from ..models.patient import Patient, PatientContext
 from ..models.journal import JournalEntry
+from ..models.alert import Alert
 from ..schemas.patient import PatientOut, PatientContextUpdate, PatientContextOut, ShortTermMemoryOut
 from ..schemas.journal import JournalEntryOut
-from ..auth import require_caregiver
+from ..auth import require_caregiver, require_patient
 from ..services.memory_service import get_short_term
-from ..services.speaker_id_service import create_embedding
+from ..services.speaker_id_service import (
+    MAX_VOICE_SAMPLES,
+    append_voice_sample,
+    create_embedding,
+    delete_voice_sample,
+    list_voice_samples,
+)
 
 router = APIRouter(prefix="/patients", tags=["patients"])
 
@@ -56,6 +63,48 @@ def list_patients(db: Session = Depends(get_db), user: User = Depends(require_ca
     return results
 
 
+@router.post("/me/logout-warning")
+def create_logout_warning(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_patient),
+):
+    """Patient-only: notify the caregiver that the patient logged out."""
+    patient = db.query(Patient).filter(Patient.user_id == user.id).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient profile not found")
+
+    alert = Alert(
+        patient_id=patient.id,
+        severity=2,
+        reason="El paciente ha cerrado sesión en la app",
+        llm_response="El paciente ha cerrado sesión en la aplicación. Conviene comprobar que no ha sido accidental.",
+        status="NEW",
+    )
+    db.add(alert)
+    db.commit()
+    db.refresh(alert)
+    return {"status": "ok", "alert_id": alert.id}
+
+
+@router.get("/me/settings")
+def get_my_patient_settings(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_patient),
+):
+    """Patient-only: read safe patient settings used by the mobile UI."""
+    patient = db.query(Patient).filter(Patient.user_id == user.id).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient profile not found")
+
+    ctx = db.query(PatientContext).filter(PatientContext.patient_id == patient.id).first()
+    context_json = ctx.context_json if ctx else {}
+    return {
+        "patient_id": patient.id,
+        "tts_enabled": bool(context_json.get("tts_enabled", True)),
+        "ui_color": context_json.get("ui_color") or "#4A90D9",
+    }
+
+
 @router.get("/{patient_id}/context", response_model=PatientContextOut)
 def get_context(patient_id: int, db: Session = Depends(get_db), user: User = Depends(require_caregiver)):
     """Get patient context JSON."""
@@ -89,6 +138,37 @@ def update_context(
     return ctx
 
 
+@router.get("/{patient_id}/voice-samples")
+def get_voice_samples(
+    patient_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_caregiver),
+):
+    """List enrolled voice samples without exposing raw embeddings."""
+    patient = _get_owned_patient(patient_id, db, user)
+    samples = list_voice_samples(patient.voice_embedding)
+    return {"samples": samples, "count": len(samples), "max_samples": MAX_VOICE_SAMPLES}
+
+
+@router.delete("/{patient_id}/voice-samples/{sample_id}")
+def remove_voice_sample(
+    patient_id: int,
+    sample_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_caregiver),
+):
+    """Delete one enrolled voice sample."""
+    patient = _get_owned_patient(patient_id, db, user)
+    before = list_voice_samples(patient.voice_embedding)
+    if not any(sample["id"] == sample_id for sample in before):
+        raise HTTPException(status_code=404, detail="Voice sample not found")
+
+    patient.voice_embedding = delete_voice_sample(patient.voice_embedding, sample_id)
+    db.commit()
+    samples = list_voice_samples(patient.voice_embedding)
+    return {"status": "ok", "samples": samples, "count": len(samples), "max_samples": MAX_VOICE_SAMPLES}
+
+
 @router.post("/{patient_id}/voice-sample")
 def upload_voice_sample(
     patient_id: int,
@@ -117,9 +197,17 @@ def upload_voice_sample(
 
     try:
         embedding = create_embedding(tmp_path)
-        patient.voice_embedding = embedding
+        patient.voice_embedding = append_voice_sample(patient.voice_embedding, embedding)
         db.commit()
-        return {"status": "ok", "message": "Voice sample enrolled", "embedding_size": len(embedding)}
+        samples = list_voice_samples(patient.voice_embedding)
+        return {
+            "status": "ok",
+            "message": "Voice sample enrolled",
+            "embedding_size": len(embedding),
+            "count": len(samples),
+            "max_samples": MAX_VOICE_SAMPLES,
+            "samples": samples,
+        }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     finally:

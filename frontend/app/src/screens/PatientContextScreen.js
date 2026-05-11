@@ -11,14 +11,22 @@ import {
   StyleSheet,
   Alert,
   Animated,
+  Switch,
 } from "react-native";
 import { Audio } from "expo-av";
 import appConfig from "../config/appConfig";
-import { getPatientContext, updatePatientContext, uploadVoiceSample } from "../services/api";
+import {
+  deleteVoiceSample,
+  getPatientContext,
+  getVoiceSamples,
+  updatePatientContext,
+  uploadVoiceSample,
+} from "../services/api";
 import PhraseListEditor from "../components/PhraseListEditor";
 
 const { voiceSample } = appConfig;
 const voiceSampleSeconds = Math.round(voiceSample.durationMs / 1000);
+const COLOR_OPTIONS = ["#4A90D9", "#27AE60", "#E67E22", "#9B59B6", "#E74C3C", "#16A085"];
 
 export default function PatientContextScreen({ patient, onBack }) {
   const [context, setContext] = useState(null);
@@ -30,9 +38,13 @@ export default function PatientContextScreen({ patient, onBack }) {
   const [caregiverNames, setCaregiverNames] = useState("");
   const [medicalNotes, setMedicalNotes] = useState("");
   const [episodeWatchInstructions, setEpisodeWatchInstructions] = useState("");
+  const [uiColor, setUiColor] = useState("#4A90D9");
+  const [ttsEnabled, setTtsEnabled] = useState(true);
   const [alertPhrases, setAlertPhrases] = useState([]);      // [{text, severity, regex}]
   const [wakeWords, setWakeWords] = useState([]);            // [{text}]
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [voiceSamples, setVoiceSamples] = useState([]);
+  const [voiceManagerOpen, setVoiceManagerOpen] = useState(false);
   const [recording, setRecording] = useState(null);
   const [voiceStatus, setVoiceStatus] = useState(null); // null | "recording" | "uploading" | "done"
   const [voiceProgress, setVoiceProgress] = useState(0); // 0-1
@@ -63,6 +75,8 @@ export default function PatientContextScreen({ patient, onBack }) {
       setCaregiverNames((profile.caregiver_names || []).join(", "));
       setMedicalNotes((profile.medical_notes || []).join("\n"));
       setEpisodeWatchInstructions(ctx.episode_watch_instructions || "");
+      setUiColor(ctx.ui_color || "#4A90D9");
+      setTtsEnabled(ctx.tts_enabled !== false);
 
       // Load unified alert_phrases (merging legacy trigger_phrases + risk_rules
       // if the backend still has those).
@@ -103,6 +117,9 @@ export default function PatientContextScreen({ patient, onBack }) {
         typeof w === "string" ? { text: w } : { text: w?.text || "" }
       );
       setWakeWords(waw);
+
+      const voice = await getVoiceSamples(patient.id);
+      setVoiceSamples(voice.samples || []);
     } catch (e) {
       Alert.alert("Error", e.message);
     } finally {
@@ -118,14 +135,24 @@ export default function PatientContextScreen({ patient, onBack }) {
       const uri = rec.getURI();
       recordingRef.current = null;
       setRecording(null);
-      await uploadVoiceSample(patient.id, uri);
+      const result = await uploadVoiceSample(patient.id, uri);
+      if (result?.samples) setVoiceSamples(result.samples);
       setVoiceStatus("done");
-      Alert.alert("Listo", "Muestra de voz registrada correctamente.");
+      Alert.alert("Listo", `Muestra de voz registrada correctamente (${result?.count || 1}/10).`);
     } catch (e) {
       setVoiceStatus(null);
       Alert.alert("Error", "Error al subir la muestra: " + e.message);
     }
   }, [patient.id]);
+
+  const handleDeleteVoiceSample = async (sampleId) => {
+    try {
+      const result = await deleteVoiceSample(patient.id, sampleId);
+      setVoiceSamples(result.samples || []);
+    } catch (e) {
+      Alert.alert("Error", "No se pudo borrar la muestra: " + e.message);
+    }
+  };
 
   const startVoiceRecording = async () => {
     try {
@@ -210,6 +237,8 @@ export default function PatientContextScreen({ patient, onBack }) {
           medical_notes: medicalNotes.split("\n").filter(Boolean),
         },
         episode_watch_instructions: episodeWatchInstructions.trim(),
+        ui_color: uiColor,
+        tts_enabled: !!ttsEnabled,
         alert_phrases: cleanedPhrases,
         assistant_wake_words: cleanedWakeWords,
       };
@@ -239,7 +268,7 @@ export default function PatientContextScreen({ patient, onBack }) {
         <Text style={styles.back}>← Volver</Text>
       </Pressable>
 
-      <Text style={styles.title}>Contexto de {patient.full_name}</Text>
+      <Text style={styles.title}>Configuración de {patient.full_name}</Text>
 
       <Text style={styles.label}>Nombre preferido</Text>
       <TextInput style={styles.input} value={preferredName} onChangeText={setPreferredName} />
@@ -258,6 +287,31 @@ export default function PatientContextScreen({ patient, onBack }) {
         multiline
         numberOfLines={3}
       />
+
+      <Text style={styles.label}>Color del paciente</Text>
+      <View style={styles.colorRow}>
+        {COLOR_OPTIONS.map((color) => (
+          <Pressable
+            key={color}
+            style={[
+              styles.colorSwatch,
+              { backgroundColor: color },
+              uiColor === color && styles.colorSwatchActive,
+            ]}
+            onPress={() => setUiColor(color)}
+          />
+        ))}
+      </View>
+
+      <View style={styles.switchRow}>
+        <View style={styles.switchText}>
+          <Text style={styles.label}>TTS por defecto</Text>
+          <Text style={styles.hint}>
+            Si está apagado, el paciente seguirá enviando audio y alertas, pero no escuchará respuestas.
+          </Text>
+        </View>
+        <Switch value={ttsEnabled} onValueChange={setTtsEnabled} />
+      </View>
 
       <Text style={styles.label}>Qué debe vigilar el asistente</Text>
       <Text style={styles.hint}>
@@ -307,9 +361,45 @@ export default function PatientContextScreen({ patient, onBack }) {
 
       <Text style={styles.label}>Muestra de voz del paciente</Text>
       <Text style={styles.hint}>
-        Graba {voiceSampleSeconds} segundos del paciente hablando para identificar su voz. Se envía automáticamente al
-        completarse.
+        Graba {voiceSampleSeconds} segundos del paciente hablando. Puedes guardar hasta 10 muestras para mejorar la
+        identificación.
       </Text>
+      <View style={styles.voiceHeaderRow}>
+        <Text style={styles.voiceCount}>{voiceSamples.length}/10 muestras guardadas</Text>
+        <Pressable style={styles.manageVoiceBtn} onPress={() => setVoiceManagerOpen((v) => !v)}>
+          <Text style={styles.manageVoiceIcon}>✎</Text>
+          <Text style={styles.manageVoiceText}>Editar</Text>
+        </Pressable>
+      </View>
+      {voiceManagerOpen ? (
+        <View style={styles.voiceManager}>
+          {voiceSamples.length ? (
+            voiceSamples.map((sample, index) => (
+              <View key={sample.id} style={styles.voiceSampleRow}>
+                <View>
+                  <Text style={styles.voiceSampleTitle}>Muestra {index + 1}</Text>
+                  <Text style={styles.voiceSampleMeta}>
+                    {sample.created_at ? new Date(sample.created_at).toLocaleString("es-ES") : "Muestra antigua"}
+                  </Text>
+                </View>
+                <Pressable
+                  style={styles.voiceDeleteBtn}
+                  onPress={() =>
+                    Alert.alert("Borrar muestra", "¿Quieres eliminar esta muestra de voz?", [
+                      { text: "Cancelar", style: "cancel" },
+                      { text: "Borrar", style: "destructive", onPress: () => handleDeleteVoiceSample(sample.id) },
+                    ])
+                  }
+                >
+                  <Text style={styles.voiceDeleteText}>Borrar</Text>
+                </Pressable>
+              </View>
+            ))
+          ) : (
+            <Text style={styles.hint}>Todavía no hay muestras guardadas.</Text>
+          )}
+        </View>
+      ) : null}
       {voiceStatus === "recording" ? (
         <View>
           <View style={styles.progressContainer}>
@@ -345,7 +435,7 @@ export default function PatientContextScreen({ patient, onBack }) {
       )}
 
       <Pressable style={styles.saveBtn} onPress={handleSave}>
-        <Text style={styles.saveText}>Guardar contexto</Text>
+        <Text style={styles.saveText}>Guardar configuración</Text>
       </Pressable>
     </ScrollView>
   );
@@ -369,6 +459,27 @@ const styles = StyleSheet.create({
   },
   multiline: { minHeight: 80, textAlignVertical: "top" },
   watchInput: { minHeight: 120, textAlignVertical: "top" },
+  colorRow: { flexDirection: "row", gap: 10, marginBottom: 8 },
+  colorSwatch: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  colorSwatchActive: { borderColor: "#222" },
+  switchRow: {
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 10,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#E0E0E0",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  switchText: { flex: 1, paddingRight: 12 },
   advancedHeader: {
     marginTop: 18,
     paddingVertical: 12,
@@ -392,6 +503,51 @@ const styles = StyleSheet.create({
     padding: 12,
     backgroundColor: "#FAFCFF",
   },
+  voiceHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  voiceCount: { color: "#555", fontSize: 13, fontWeight: "600" },
+  manageVoiceBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#4A90D9",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  manageVoiceIcon: { color: "#4A90D9", fontSize: 15, fontWeight: "700" },
+  manageVoiceText: { color: "#4A90D9", fontSize: 13, fontWeight: "700" },
+  voiceManager: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#E0E0E0",
+    backgroundColor: "#fff",
+    padding: 10,
+    marginBottom: 10,
+  },
+  voiceSampleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F1F1F1",
+  },
+  voiceSampleTitle: { fontSize: 14, fontWeight: "700", color: "#333" },
+  voiceSampleMeta: { fontSize: 12, color: "#777", marginTop: 2 },
+  voiceDeleteBtn: {
+    borderRadius: 8,
+    backgroundColor: "#FDECEC",
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  voiceDeleteText: { color: "#E74C3C", fontSize: 12, fontWeight: "700" },
   saveBtn: {
     backgroundColor: "#4A90D9",
     borderRadius: 12,

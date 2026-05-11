@@ -74,10 +74,21 @@ export async function getPatientContext(patientId) {
   return request(`/patients/${patientId}/context`);
 }
 
+export async function getMyPatientSettings() {
+  return request("/patients/me/settings");
+}
+
 export async function updatePatientContext(patientId, contextJson) {
   return request(`/patients/${patientId}/context`, {
     method: "PUT",
     body: JSON.stringify({ context_json: contextJson }),
+  });
+}
+
+export async function sendPatientLogoutWarning() {
+  return request("/patients/me/logout-warning", {
+    method: "POST",
+    body: JSON.stringify({}),
   });
 }
 
@@ -88,6 +99,16 @@ export async function getPatientJournal(patientId, sinceHours = 24, limit = 100)
 
 export async function getPatientShortTermMemory(patientId) {
   return request(`/patients/${patientId}/short-term-memory`);
+}
+
+export async function getVoiceSamples(patientId) {
+  return request(`/patients/${patientId}/voice-samples`);
+}
+
+export async function deleteVoiceSample(patientId, sampleId) {
+  return request(`/patients/${patientId}/voice-samples/${sampleId}`, {
+    method: "DELETE",
+  });
 }
 
 // ─── Alerts (caregiver) ──────────────────────────────

@@ -51,6 +51,8 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
         db.flush()
         default_context = {
             "episode_watch_instructions": "",
+            "ui_color": "#4A90D9",
+            "tts_enabled": True,
             "static_profile": {
                 "preferred_name": req.full_name.split()[0],
                 "current_address": "",

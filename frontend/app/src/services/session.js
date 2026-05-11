@@ -10,6 +10,7 @@ import { setToken } from "./api";
 
 const TOKEN_KEY = "tfg_token";
 const USER_KEY = "tfg_user";
+const PATIENT_TTS_PREFIX = "tfg_patient_tts_enabled_";
 
 export async function saveSession(token, user) {
   try {
@@ -43,5 +44,26 @@ export async function clearSession() {
     console.warn("clearSession failed:", e?.message || e);
   } finally {
     setToken(null);
+  }
+}
+
+export async function savePatientTtsEnabled(userId, enabled) {
+  if (!userId) return;
+  try {
+    await SecureStore.setItemAsync(`${PATIENT_TTS_PREFIX}${userId}`, enabled ? "1" : "0");
+  } catch (e) {
+    console.warn("savePatientTtsEnabled failed:", e?.message || e);
+  }
+}
+
+export async function loadPatientTtsEnabled(userId) {
+  if (!userId) return true;
+  try {
+    const raw = await SecureStore.getItemAsync(`${PATIENT_TTS_PREFIX}${userId}`);
+    if (raw == null) return true;
+    return raw === "1";
+  } catch (e) {
+    console.warn("loadPatientTtsEnabled failed:", e?.message || e);
+    return true;
   }
 }
