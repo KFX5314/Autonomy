@@ -50,6 +50,7 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
         db.add(patient)
         db.flush()
         default_context = {
+            "episode_watch_instructions": "",
             "static_profile": {
                 "preferred_name": req.full_name.split()[0],
                 "current_address": "",

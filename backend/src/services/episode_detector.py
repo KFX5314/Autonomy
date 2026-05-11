@@ -146,8 +146,14 @@ def _resolve_alert_phrases(context: dict) -> list[dict]:
     return merged
 
 
+def _get_episode_watch_instructions(context: dict) -> str:
+    value = context.get("episode_watch_instructions", "")
+    return value.strip() if isinstance(value, str) else ""
+
+
 def _build_analysis_prompt(context: dict, transcript: str, short_term_memory: str = "") -> str:
     alert_phrases = _resolve_alert_phrases(context)
+    watch_instructions = _get_episode_watch_instructions(context)
     patient_text = _extract_patient_text(transcript)
 
     phrase_lines = []
@@ -155,6 +161,15 @@ def _build_analysis_prompt(context: dict, transcript: str, short_term_memory: st
         kind = "regex" if p["regex"] else "frase"
         phrase_lines.append(f'- [{kind}] "{p["text"]}" (severidad {p["severity"]})')
     phrase_list = "\n".join(phrase_lines) or "- (ninguna)"
+    watch_section = (
+        watch_instructions
+        if watch_instructions
+        else (
+            "No hay criterios personalizados definidos. Usa el criterio general: "
+            "sentido común clínico/asistencial, perfil del paciente, notas médicas, "
+            "memoria reciente y transcripción actual."
+        )
+    )
 
     stm_section = ""
     if short_term_memory:
@@ -175,6 +190,10 @@ def _build_analysis_prompt(context: dict, transcript: str, short_term_memory: st
         f"- [ASSISTANT] es la respuesta hablada anterior del sistema; nunca activa episodio por si sola.\n"
         f"- La memoria reciente sólo aclara referencias; no es el audio actual.\n"
         f"- No inventes datos que no estén en el perfil, la memoria o la transcripción.\n\n"
+        f"Usa primero los criterios personalizados de vigilancia del responsable si existen. "
+        f"Estos criterios describen en lenguaje natural qué situaciones, comportamientos, frases "
+        f"o patrones semánticos son preocupantes para este paciente concreto. No exijas coincidencia literal: "
+        f"interpreta el significado de lo dicho por el paciente.\n\n"
         f"Marca episode=true sólo si el audio actual del paciente muestra una necesidad real de intervención "
         f"con severidad {config.LLM_ALERT_MIN_SEVERITY} o superior: "
         f"desorientación, petición de ayuda, angustia importante, riesgo de fuga/daño, síntoma médico preocupante, "
@@ -194,7 +213,12 @@ def _build_analysis_prompt(context: dict, transcript: str, short_term_memory: st
         f"5 = peligro inmediato, emergencia o riesgo físico.\n\n"
         f"--- Perfil del paciente ---\n"
         f"{_build_profile_block(context)}\n\n"
-        f"--- Frases de alerta ---\n{phrase_list}\n"
+        f"--- Criterios personalizados de vigilancia ---\n"
+        f"{watch_section}\n\n"
+        f"--- Patrones técnicos avanzados ya comprobados antes del LLM ---\n"
+        f"{phrase_list}\n"
+        f"Estos patrones pueden servir como contexto secundario, pero la comprobación determinista "
+        f"ya se ha ejecutado antes de este análisis.\n"
         f"{stm_section}\n"
         f"--- Texto extraído del paciente en el audio actual ---\n"
         f"{patient_text or '(vacío)'}\n\n"
@@ -278,6 +302,13 @@ class EpisodeDetector:
         text_lower = (patient_text or "").lower().strip()
         if not text_lower:
             return None
+
+        if re.search(r"\b(?:ayuda|ayudame|ayúdame)\b", text_lower):
+            return EpisodeResult(
+                is_episode=True,
+                severity=5,
+                reason='Palabra de emergencia detectada: "ayuda"',
+            )
 
         for item in _resolve_alert_phrases(self.context):
             pattern = item["text"].lower()

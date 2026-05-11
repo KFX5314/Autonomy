@@ -29,8 +29,10 @@ export default function PatientContextScreen({ patient, onBack }) {
   const [address, setAddress] = useState("");
   const [caregiverNames, setCaregiverNames] = useState("");
   const [medicalNotes, setMedicalNotes] = useState("");
+  const [episodeWatchInstructions, setEpisodeWatchInstructions] = useState("");
   const [alertPhrases, setAlertPhrases] = useState([]);      // [{text, severity, regex}]
   const [wakeWords, setWakeWords] = useState([]);            // [{text}]
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [recording, setRecording] = useState(null);
   const [voiceStatus, setVoiceStatus] = useState(null); // null | "recording" | "uploading" | "done"
   const [voiceProgress, setVoiceProgress] = useState(0); // 0-1
@@ -60,6 +62,7 @@ export default function PatientContextScreen({ patient, onBack }) {
       setAddress(profile.current_address || "");
       setCaregiverNames((profile.caregiver_names || []).join(", "));
       setMedicalNotes((profile.medical_notes || []).join("\n"));
+      setEpisodeWatchInstructions(ctx.episode_watch_instructions || "");
 
       // Load unified alert_phrases (merging legacy trigger_phrases + risk_rules
       // if the backend still has those).
@@ -206,6 +209,7 @@ export default function PatientContextScreen({ patient, onBack }) {
           caregiver_names: caregiverNames.split(",").map((s) => s.trim()).filter(Boolean),
           medical_notes: medicalNotes.split("\n").filter(Boolean),
         },
+        episode_watch_instructions: episodeWatchInstructions.trim(),
         alert_phrases: cleanedPhrases,
         assistant_wake_words: cleanedWakeWords,
       };
@@ -255,18 +259,39 @@ export default function PatientContextScreen({ patient, onBack }) {
         numberOfLines={3}
       />
 
-      <Text style={styles.label}>Frases de alerta</Text>
+      <Text style={styles.label}>Qué debe vigilar el asistente</Text>
       <Text style={styles.hint}>
-        Cuando el paciente diga una de estas frases, se generará una alerta.
-        La severidad (1–5) prioriza la alerta. Activa "regex" para tratar el
-        texto como expresión regular.
+        Describe en lenguaje natural situaciones, comportamientos o temas que
+        puedan indicar un episodio para este paciente.
       </Text>
-      <PhraseListEditor
-        value={alertPhrases}
-        onChange={setAlertPhrases}
-        mode="alert"
-        addLabel="Añadir frase de alerta"
+      <TextInput
+        style={[styles.input, styles.watchInput]}
+        value={episodeWatchInstructions}
+        onChangeText={setEpisodeWatchInstructions}
+        placeholder="Ej. Si habla de ir a su antiguo trabajo, puede estar desorientado."
+        multiline
+        numberOfLines={5}
       />
+
+      <Pressable style={styles.advancedHeader} onPress={() => setAdvancedOpen((v) => !v)}>
+        <Text style={styles.advancedTitle}>Avanzado</Text>
+        <Text style={styles.advancedIcon}>{advancedOpen ? "v" : ">"}</Text>
+      </Pressable>
+      {advancedOpen ? (
+        <View style={styles.advancedBody}>
+          <Text style={styles.label}>Frases de alerta y patrones técnicos</Text>
+          <Text style={styles.hint}>
+            Estas frases o regex se comprueban antes del LLM. Úsalas para casos
+            técnicos concretos. "Ayuda" se mantiene siempre como palabra de emergencia.
+          </Text>
+          <PhraseListEditor
+            value={alertPhrases}
+            onChange={setAlertPhrases}
+            mode="alert"
+            addLabel="Añadir frase de alerta"
+          />
+        </View>
+      ) : null}
 
       <Text style={styles.label}>Palabras de activación del asistente</Text>
       <Text style={styles.hint}>
@@ -343,6 +368,30 @@ const styles = StyleSheet.create({
     borderColor: "#E0E0E0",
   },
   multiline: { minHeight: 80, textAlignVertical: "top" },
+  watchInput: { minHeight: 120, textAlignVertical: "top" },
+  advancedHeader: {
+    marginTop: 18,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#D8E6F5",
+    backgroundColor: "#EEF6FF",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  advancedTitle: { color: "#2F6EA8", fontSize: 15, fontWeight: "700" },
+  advancedIcon: { color: "#2F6EA8", fontSize: 18, fontWeight: "700" },
+  advancedBody: {
+    borderWidth: 1,
+    borderTopWidth: 0,
+    borderColor: "#D8E6F5",
+    borderBottomLeftRadius: 10,
+    borderBottomRightRadius: 10,
+    padding: 12,
+    backgroundColor: "#FAFCFF",
+  },
   saveBtn: {
     backgroundColor: "#4A90D9",
     borderRadius: 12,
