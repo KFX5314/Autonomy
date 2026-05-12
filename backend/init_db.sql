@@ -1,8 +1,8 @@
 -- ============================================================
 -- TFG-DEMENCIA: MariaDB Schema
 -- ============================================================
--- Run: mysql -u root -p < init_db.sql
--- Or via Docker: docker exec -i mariadb mysql -u root -prootpass < init_db.sql
+-- Run: mariadb -u root -p < init_db.sql
+-- Or via Docker: docker exec -i mariadb mariadb -u root -prootpass < init_db.sql
 -- ============================================================
 
 CREATE DATABASE IF NOT EXISTS tfg_demencia CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

@@ -12,8 +12,11 @@ Los tests de integración usan una base separada llamada `tfg_demencia_test`. Nu
 Desde la raíz del proyecto:
 
 ```powershell
-mysql -u root -p < backend/init_test_db.sql
+mariadb -u root -p < backend/init_test_db.sql
 ```
+
+Si tu instalación de MariaDB conserva el alias histórico `mysql`, el comando
+equivalente también funcionará con `mysql -u root -p`.
 
 Por defecto los tests usan:
 

@@ -112,11 +112,12 @@ Si quedan procesos antiguos en puertos de desarrollo, ejecuta:
 Opción A: MariaDB local ya instalado.
 
 ```powershell
-mysql -u root -p < backend/init_db.sql
-mysql -u root -p < backend/fix_auth.sql
+mariadb -u root -p < backend/init_db.sql
+mariadb -u root -p < backend/fix_auth.sql
 ```
 
 `fix_auth.sql` crea o ajusta el usuario `tfg_app`, necesario especialmente en instalaciones recientes de MariaDB.
+Si tu instalación conserva el alias `mysql`, puedes usarlo como equivalente.
 
 Opción B: contenedor solo para MariaDB.
 
@@ -127,7 +128,7 @@ docker run -d --name mariadb `
   -p 3306:3306 `
   mariadb:11
 
-docker exec -i mariadb mysql -u root -prootpass < backend/init_db.sql
+docker exec -i mariadb mariadb -u root -prootpass < backend/init_db.sql
 ```
 
 El proyecto no incluye un despliegue completo por contenedores; esta opción solo levanta la base de datos.
@@ -235,7 +236,7 @@ La suite de backend usa `pytest` y una base MariaDB separada llamada `tfg_demenc
 ```powershell
 cd backend
 pip install -r requirements.txt -r requirements-dev.txt
-mysql -u root -p < init_test_db.sql
+mariadb -u root -p < init_test_db.sql
 python -m pytest
 ```
 
