@@ -6,6 +6,7 @@ Run with:
 """
 
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -112,23 +113,26 @@ async def lifespan(app: FastAPI):
     from .services.alert_audio_retention import sweep_expired_alert_audio
     sweep_expired_alert_audio()
 
-    logger.info("Warming up models...")
+    if os.getenv("TFG_SKIP_MODEL_WARMUP") == "1":
+        logger.warning("Skipping model warm-up because TFG_SKIP_MODEL_WARMUP=1.")
+    else:
+        logger.info("Warming up models...")
 
-    from .services.stt_service import warmup as warmup_stt
-    warmup_stt()
+        from .services.stt_service import warmup as warmup_stt
+        warmup_stt()
 
-    from .services.speaker_id_service import warmup as warmup_speaker
-    warmup_speaker()
+        from .services.speaker_id_service import warmup as warmup_speaker
+        warmup_speaker()
 
-    llm = get_llm_provider()
-    if isinstance(llm, OllamaProvider):
-        await llm.check_model()
-        try:
-            logger.info("Warming up Ollama (first inference)...")
-            await llm.generate("Responde OK.", "test")
-            logger.info("Ollama warm-up done.")
-        except Exception as e:
-            logger.warning(f"Ollama warm-up inference failed: {e}")
+        llm = get_llm_provider()
+        if isinstance(llm, OllamaProvider):
+            await llm.check_model()
+            try:
+                logger.info("Warming up Ollama (first inference)...")
+                await llm.generate("Responde OK.", "test")
+                logger.info("Ollama warm-up done.")
+            except Exception as e:
+                logger.warning(f"Ollama warm-up inference failed: {e}")
 
     logger.info("All models ready. Server accepting requests.")
     yield
@@ -163,6 +167,8 @@ app.include_router(alerts_router)
 
 @app.get("/health")
 async def health():
+    if os.getenv("TFG_SKIP_HEALTH_LLM") == "1":
+        return {"status": "ok", "llm_available": True}
     llm = get_llm_provider()
     llm_ok = await llm.health_check()
     return {"status": "ok", "llm_available": llm_ok}

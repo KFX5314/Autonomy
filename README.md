@@ -240,7 +240,14 @@ mariadb -u root -p < init_test_db.sql
 python -m pytest
 ```
 
-Los audios reales de validación se guardan fuera de Git. Para la validación local opcional, graba un audio propio y colócalo en `backend/tests/fixtures/private_audio/`; si la carpeta está vacía, el test se salta con un aviso claro. Consulta `docs/TESTING.md` para preparar la base de test, ejecutar marcadores y documentar KPIs.
+Si no tienes GPU dedicada activa, o CUDA no está disponible, ejecuta los tests de audio real en CPU:
+
+```powershell
+$env:STT_DEVICE="cpu"
+python -m pytest
+```
+
+Los audios reales de validación se guardan fuera de Git. Para la validación local opcional, graba un audio propio y colócalo en `backend/tests/fixtures/private_audio/`; si la carpeta está vacía, el test se salta con un aviso claro. También hay un test opcional `server_e2e` que arranca `scripts/run-backend-e2e.ps1` contra la base de test y valida STM/Journal por HTTP. Consulta `docs/TESTING.md` para preparar la base de test, ejecutar marcadores y documentar KPIs.
 
 ## Configuración Tailscale
 
@@ -375,7 +382,7 @@ TFG-DEMENCIA/
 | `STM_WINDOW_MINUTES` | `5` | Ventana de memoria a corto plazo |
 | `STM_MAX_UTTERANCES` | `12` | Máximo de frases en STM |
 | `STM_MAX_CHARS` | `1500` | Límite de caracteres en STM |
-| `JOURNAL_MIN_UTTERANCES` | `3` | Mínimo de líneas STM seleccionadas para compactar al diario |
+| `JOURNAL_MIN_UTTERANCES` | `1` | Mínimo de líneas STM seleccionadas para compactar al diario; `1` evita perder actividad escasa |
 | `JOURNAL_ENTRY_MAX_CHARS` | `240` | Máximo de caracteres guardados por entrada de diario |
 | `JOURNAL_RETENTION_HOURS` | `24` | Retención del diario |
 | `JOURNAL_MAX_ENTRIES` | `50` | Máximo de entradas de diario por paciente |

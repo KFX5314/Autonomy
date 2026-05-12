@@ -169,7 +169,7 @@ class Config:
     STM_WINDOW_MINUTES: int = field(default_factory=lambda: int(os.getenv("STM_WINDOW_MINUTES", "5")))
     STM_MAX_UTTERANCES: int = field(default_factory=lambda: int(os.getenv("STM_MAX_UTTERANCES", "12")))
     STM_MAX_CHARS: int = field(default_factory=lambda: int(os.getenv("STM_MAX_CHARS", "1500")))
-    JOURNAL_MIN_UTTERANCES: int = field(default_factory=lambda: int(os.getenv("JOURNAL_MIN_UTTERANCES", "3")))
+    JOURNAL_MIN_UTTERANCES: int = field(default_factory=lambda: int(os.getenv("JOURNAL_MIN_UTTERANCES", "1")))
     JOURNAL_ENTRY_MAX_CHARS: int = field(default_factory=lambda: int(os.getenv("JOURNAL_ENTRY_MAX_CHARS", "240")))
     JOURNAL_RETENTION_HOURS: int = field(default_factory=lambda: int(os.getenv("JOURNAL_RETENTION_HOURS", "24")))
     JOURNAL_MAX_ENTRIES: int = field(default_factory=lambda: int(os.getenv("JOURNAL_MAX_ENTRIES", "50")))

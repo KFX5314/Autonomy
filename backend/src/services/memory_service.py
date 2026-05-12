@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from threading import Lock
 
-from sqlalchemy import delete
+from sqlalchemy import and_, delete, or_
 from sqlalchemy.orm import Session
 
 from ..config import config
@@ -118,23 +118,61 @@ def _get_short_term_items(
     if exclude_transcript_id is not None:
         query = query.filter(Transcript.id != exclude_transcript_id)
 
-    rows = query.order_by(Transcript.started_at.desc()).limit(max_utterances * 4).all()
+    batch_size = max(1, max_utterances * 4)
+    max_rows_to_scan = max(batch_size, max_utterances * 12)
 
     items: list[_STMItem] = []
-    for row in rows:
-        ts = row.started_at.strftime("%H:%M")
-        fragments = _extract_memory_lines(
-            row.transcript_text,
-            include_assistant=include_assistant,
-            include_other=include_other,
-            include_uncertain_patient=include_uncertain_patient,
+    rows_scanned = 0
+    before_started_at: datetime | None = None
+    before_id: int | None = None
+
+    while len(items) < max_utterances and rows_scanned < max_rows_to_scan:
+        page_query = query
+        if before_started_at is not None and before_id is not None:
+            page_query = page_query.filter(
+                or_(
+                    Transcript.started_at < before_started_at,
+                    and_(
+                        Transcript.started_at == before_started_at,
+                        Transcript.id < before_id,
+                    ),
+                )
+            )
+
+        rows = (
+            page_query
+            .order_by(Transcript.started_at.desc(), Transcript.id.desc())
+            .limit(min(batch_size, max_rows_to_scan - rows_scanned))
+            .all()
         )
-        for tag, text in fragments:
-            line = f"[{ts}] [{tag}] {text}"
-            items.append(_STMItem(row.id, row.started_at, tag, text, line))
+        if not rows:
+            break
+
+        rows_scanned += len(rows)
+        last_row = rows[-1]
+        before_started_at = last_row.started_at
+        before_id = last_row.id
+
+        for row in rows:
+            ts = row.started_at.strftime("%H:%M")
+            fragments = _extract_memory_lines(
+                row.transcript_text,
+                include_assistant=include_assistant,
+                include_other=include_other,
+                include_uncertain_patient=include_uncertain_patient,
+            )
+            # Rows are scanned newest-first. Within a transcript, regex
+            # fragments are chronological, so reverse them while collecting
+            # and reverse the final item list back to oldest-first below.
+            for tag, text in reversed(fragments):
+                line = f"[{ts}] [{tag}] {text}"
+                items.append(_STMItem(row.id, row.started_at, tag, text, line))
+                if len(items) >= max_utterances:
+                    break
             if len(items) >= max_utterances:
                 break
-        if len(items) >= max_utterances:
+
+        if len(rows) < batch_size:
             break
 
     if not items:

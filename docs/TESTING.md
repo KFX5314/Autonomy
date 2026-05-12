@@ -44,6 +44,13 @@ Ejecutar la suite normal:
 python -m pytest
 ```
 
+Si el equipo no tiene GPU dedicada activa, o CUDA no esta disponible, fuerza Whisper en CPU antes de ejecutar tests con audio real:
+
+```powershell
+$env:STT_DEVICE="cpu"
+python -m pytest
+```
+
 Ejecutar solo tests de integracion:
 
 ```powershell
@@ -61,6 +68,15 @@ Ejecutar validacion local con audios reales:
 ```powershell
 python -m pytest -m audio_real
 ```
+
+Ejecutar el flujo HTTP real de memoria con servidor externo:
+
+```powershell
+$env:TFG_RUN_SERVER_E2E="1"
+python -m pytest -m server_e2e tests/test_memory_server_e2e_optional.py
+```
+
+Ese test arranca `scripts/run-backend-e2e.ps1` contra `tfg_demencia_test`, registra cuidador/paciente por HTTP, rellena STM y Journal con datos mock en la base de test, y consulta los endpoints reales. Para no depender de modelos en una prueba de memoria, ese launcher de test activa `TFG_SKIP_MODEL_WARMUP=1` y `TFG_SKIP_HEALTH_LLM=1`, y no llama endpoints que necesiten inferencia LLM real.
 
 Por defecto el test busca audios privados en:
 
@@ -97,7 +113,8 @@ Para la memoria del proyecto, las pruebas reales de audio deben presentarse como
 | Permisos cuidador/paciente | Tests de integracion | 100% casos definidos |
 | Frases/regex de alerta | Tests unitarios | 100% casos definidos |
 | Pipeline de alerta mockeado | Test de integracion | Correcto |
-| Overhead con STM/Journal llenos | Tests `performance` mockeados | <1 s recomendado |
+| Flujo HTTP de STM/Journal | Test opcional `server_e2e` | Correcto |
+| Overhead con STM/Journal llenos | Tests `performance` mockeados, sin Whisper/Ollama | <1 s recomendado |
 | STT real | Prueba experimental local | >=80% palabras clave |
 | Diarizacion real | Prueba experimental local | Reportar acierto en casos definidos |
-| Tiempo total de chunk real | Prueba experimental local | <20 s recomendado |
+| Tiempo total de chunk real | Prueba experimental local con audio + LLM reales | <20 s recomendado |

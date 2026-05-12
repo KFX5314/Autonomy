@@ -82,6 +82,73 @@ async def test_silence_only_stm_skips_journal_without_llm(db_session, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_sparse_new_stm_still_creates_journal_entry(db_session, monkeypatch):
+    patient = _make_patient(db_session)
+    now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
+    _add_transcript(
+        db_session,
+        patient.id,
+        now.replace(tzinfo=None) - timedelta(minutes=1),
+        "[PACIENTE] He comido sopa.",
+    )
+    db_session.commit()
+
+    fake = FakeLLM("El paciente dijo que habia comido sopa.")
+    monkeypatch.setattr(memory_service, "get_llm_provider", lambda: fake)
+
+    await memory_service.summarize_and_append(patient.id, db=db_session, now=now)
+
+    entry = db_session.query(JournalEntry).filter(JournalEntry.patient_id == patient.id).one()
+    assert "sopa" in entry.summary_text
+    assert len(fake.calls) == 1
+
+
+def test_short_term_paginates_past_empty_recent_transcripts(db_session):
+    patient = _make_patient(db_session)
+    now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
+    base = now.replace(tzinfo=None)
+    for idx in range(8):
+        _add_transcript(db_session, patient.id, base - timedelta(seconds=idx), "   ")
+    _add_transcript(db_session, patient.id, base - timedelta(seconds=20), "[PACIENTE] linea util antigua")
+    _add_transcript(db_session, patient.id, base - timedelta(seconds=10), "[PACIENTE] linea util nueva")
+    db_session.commit()
+
+    stm = memory_service.get_short_term(
+        patient.id,
+        db_session,
+        now=now,
+        max_utterances=2,
+        max_chars=1000,
+    )
+
+    assert "linea util antigua" in stm
+    assert "linea util nueva" in stm
+    assert stm.index("linea util antigua") < stm.index("linea util nueva")
+
+
+def test_short_term_preserves_fragment_order_inside_transcript(db_session):
+    patient = _make_patient(db_session)
+    now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
+    _add_transcript(
+        db_session,
+        patient.id,
+        now.replace(tzinfo=None) - timedelta(seconds=10),
+        "[PACIENTE] Hola asistente. [ASSISTANT] Hola, estoy contigo.",
+    )
+    db_session.commit()
+
+    lines = memory_service.get_short_term(
+        patient.id,
+        db_session,
+        now=now,
+        max_utterances=2,
+    ).splitlines()
+
+    assert lines[0].endswith("[PACIENTE] Hola asistente.")
+    assert lines[1].endswith("[ASSISTANT] Hola, estoy contigo.")
+
+
+@pytest.mark.asyncio
 async def test_journal_summary_can_include_assistant_and_other_lines(db_session, monkeypatch):
     patient = _make_patient(db_session)
     now = datetime(2026, 5, 12, 12, 7, tzinfo=timezone.utc)
