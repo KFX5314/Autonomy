@@ -49,9 +49,17 @@ backend/models/
 # Alert audio data
 backend/data/alert_audio/
 
+# Audio de pruebas locales (voz y salud son datos sensibles)
+backend/tests/local_audio/
+*.wav
+*.m4a
+*.mp3
+*.aac
+
 # Misc
 Autonomy (respuestas) - Respuestas de formulario 1.csv
 deep-research-report.md
 desktop.ini
 INFORME DEL PROYECTO DE  EMPRENDIMIENTO.md
 TFG.docx
+BORRAR.md

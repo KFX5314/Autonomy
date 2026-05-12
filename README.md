@@ -228,6 +228,19 @@ Si el `.env` conserva una URL `http://100.x.y.z:8000` y Tailscale no está activ
    - ACK de la alerta;
    - diario del paciente.
 
+## Tests automatizados
+
+La suite de backend usa `pytest` y una base MariaDB separada llamada `tfg_demencia_test`. Los tests automáticos mockean STT, diarización y LLM cuando prueban `/audio/chunk`, de forma que no arrancan Whisper, SpeechBrain ni Ollama por defecto.
+
+```powershell
+cd backend
+pip install -r requirements.txt -r requirements-dev.txt
+mysql -u root -p < init_test_db.sql
+python -m pytest
+```
+
+Los audios reales de validación se guardan fuera de Git. Consulta `docs/TESTING.md` para preparar la base de test, ejecutar marcadores y documentar KPIs.
+
 ## Configuración Tailscale
 
 Tailscale es la forma recomendada de conectar móviles y PC sin exponer el backend a Internet. El código no obliga a usar Tailscale; es una decisión de despliegue.
