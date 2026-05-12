@@ -169,9 +169,10 @@ class Config:
     STM_WINDOW_MINUTES: int = field(default_factory=lambda: int(os.getenv("STM_WINDOW_MINUTES", "5")))
     STM_MAX_UTTERANCES: int = field(default_factory=lambda: int(os.getenv("STM_MAX_UTTERANCES", "12")))
     STM_MAX_CHARS: int = field(default_factory=lambda: int(os.getenv("STM_MAX_CHARS", "1500")))
-    JOURNAL_INTERVAL_MINUTES: int = field(default_factory=lambda: int(os.getenv("JOURNAL_INTERVAL_MINUTES", "5")))
+    JOURNAL_MIN_UTTERANCES: int = field(default_factory=lambda: int(os.getenv("JOURNAL_MIN_UTTERANCES", "3")))
+    JOURNAL_ENTRY_MAX_CHARS: int = field(default_factory=lambda: int(os.getenv("JOURNAL_ENTRY_MAX_CHARS", "240")))
     JOURNAL_RETENTION_HOURS: int = field(default_factory=lambda: int(os.getenv("JOURNAL_RETENTION_HOURS", "24")))
-    JOURNAL_MAX_ENTRIES: int = field(default_factory=lambda: int(os.getenv("JOURNAL_MAX_ENTRIES", "200")))
+    JOURNAL_MAX_ENTRIES: int = field(default_factory=lambda: int(os.getenv("JOURNAL_MAX_ENTRIES", "50")))
 
     # Transcript retention. Cleanup runs piggy-backed on the journal background
     # task, so cost is essentially zero.

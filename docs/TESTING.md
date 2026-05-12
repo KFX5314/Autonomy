@@ -1,22 +1,21 @@
 # Estrategia de pruebas
 
-La suite de backend separa dos tipos de validación:
+La suite de backend separa dos tipos de validacion:
 
-- **Tests automáticos reproducibles**: autenticación, permisos, reglas de episodios, parsers, gestión de alertas y endpoint de audio con STT/diarización/LLM mockeados.
-- **Pruebas experimentales locales**: STT real, diarización real, LLM local y tiempos de procesamiento. No forman parte de la suite por defecto porque dependen de modelos, hardware y audios privados.
+- **Tests automaticos reproducibles**: autenticacion, permisos, reglas de episodios, parsers, gestion de alertas y endpoint de audio con STT/diarizacion/LLM mockeados.
+- **Pruebas experimentales locales**: STT real, diarizacion real, LLM local y tiempos de procesamiento. No forman parte de la suite por defecto porque dependen de modelos, hardware y audios privados.
 
 ## Preparar MariaDB de test
 
-Los tests de integración usan una base separada llamada `tfg_demencia_test`. Nunca deben ejecutarse contra `tfg_demencia`.
+Los tests de integracion usan una base separada llamada `tfg_demencia_test`. Nunca deben ejecutarse contra `tfg_demencia`.
 
-Desde la raíz del proyecto:
+Desde la raiz del proyecto:
 
 ```powershell
 mariadb -u root -p < backend/init_test_db.sql
 ```
 
-Si tu instalación de MariaDB conserva el alias histórico `mysql`, el comando
-equivalente también funcionará con `mysql -u root -p`.
+Si tu instalacion de MariaDB conserva el alias historico `mysql`, el comando equivalente tambien funcionara con `mysql -u root -p`.
 
 Por defecto los tests usan:
 
@@ -45,19 +44,31 @@ Ejecutar la suite normal:
 python -m pytest
 ```
 
-Ejecutar sólo tests de integración:
+Ejecutar solo tests de integracion:
 
 ```powershell
 python -m pytest -m integration
 ```
 
-Ejecutar sólo tests unitarios rápidos:
+Ejecutar solo tests unitarios rapidos:
 
 ```powershell
 python -m pytest -m "not integration"
 ```
 
-Ejecutar validación local con audios reales:
+Ejecutar validacion local con audios reales:
+
+```powershell
+python -m pytest -m audio_real
+```
+
+Por defecto el test busca audios privados en:
+
+```text
+backend/tests/fixtures/private_audio/
+```
+
+Tambien puedes usar otra carpeta:
 
 ```powershell
 $env:TFG_AUDIO_FIXTURES_DIR="C:\ruta\a\audios_privados"
@@ -66,26 +77,27 @@ python -m pytest -m audio_real
 
 ## Audio
 
-Los tests automáticos no suben audios reales al repositorio. El endpoint `/audio/chunk` se prueba con multipart dummy y servicios mockeados para validar el flujo HTTP, persistencia y creación de alertas sin arrancar Whisper, SpeechBrain ni Ollama.
+Los tests automaticos no suben audios reales al repositorio. El endpoint `/audio/chunk` se prueba con multipart dummy y servicios mockeados para validar el flujo HTTP, persistencia y creacion de alertas sin arrancar Whisper, SpeechBrain ni Ollama.
 
-Los audios reales usados para validar STT/diarización deben guardarse fuera de Git, por ejemplo:
+Los audios reales usados para validar STT/diarizacion deben guardarse fuera de Git, por ejemplo:
 
 ```text
-backend/tests/local_audio/
+backend/tests/fixtures/private_audio/
 ```
 
-Esa carpeta y las extensiones de audio comunes están ignoradas en `.gitignore`.
+Esa carpeta y las extensiones de audio comunes estan ignoradas en `.gitignore`. Si la carpeta esta vacia, el test se salta con un mensaje claro. Graba un audio corto propio y guardalo ahi como `.wav`, `.m4a`, `.mp3` o `.aac` para ejecutar la validacion real.
 
-Para la memoria del proyecto, las pruebas reales de audio deben presentarse como validación experimental local: indicar entorno, número de ejecuciones, resultado observado y limitaciones. No deben usarse voces de pacientes reales ni audios con datos personales.
+Para la memoria del proyecto, las pruebas reales de audio deben presentarse como validacion experimental local: indicar entorno, numero de ejecuciones, resultado observado y limitaciones. No deben usarse voces de pacientes reales ni audios con datos personales.
 
 ## KPIs recomendadas
 
-| KPI | Método | Umbral |
+| KPI | Metodo | Umbral |
 |---|---|---|
-| Registro/login y roles | Tests de integración | 100% casos definidos |
-| Permisos cuidador/paciente | Tests de integración | 100% casos definidos |
+| Registro/login y roles | Tests de integracion | 100% casos definidos |
+| Permisos cuidador/paciente | Tests de integracion | 100% casos definidos |
 | Frases/regex de alerta | Tests unitarios | 100% casos definidos |
-| Pipeline de alerta mockeado | Test de integración | Correcto |
+| Pipeline de alerta mockeado | Test de integracion | Correcto |
+| Overhead con STM/Journal llenos | Tests `performance` mockeados | <1 s recomendado |
 | STT real | Prueba experimental local | >=80% palabras clave |
-| Diarización real | Prueba experimental local | Reportar acierto en casos definidos |
+| Diarizacion real | Prueba experimental local | Reportar acierto en casos definidos |
 | Tiempo total de chunk real | Prueba experimental local | <20 s recomendado |

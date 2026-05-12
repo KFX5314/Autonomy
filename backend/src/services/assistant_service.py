@@ -1,16 +1,10 @@
 """
 Wake-word assistant QA service.
 
-When the patient says a configured wake word (e.g. "asistente", "ayúdame"),
-the audio pipeline diverts the flow here instead of the episode detector.
-The patient asks a question, the LLM answers grounded in:
-  - the patient profile (name, address, caregivers, medical notes)
-  - the last 24h journal (top 10 condensed entries)
-  - the short-term memory buffer
-  - the full transcript of the current audio chunk (for immediate context)
-
-The answer is spoken back by the patient app via expo-speech. This is NOT
-the alert/episode path: no Alert row is persisted here.
+When the patient says a configured wake word (for example "asistente" or
+"ayudame"), the audio pipeline diverts the flow here instead of the episode
+detector. The answer is spoken back by the patient app via expo-speech. This is
+not the alert/episode path: no Alert row is persisted here.
 """
 
 from __future__ import annotations
@@ -37,11 +31,11 @@ def _build_system_prompt(context: dict) -> str:
 
     return (
         f"Eres un asistente personal para {name}, una persona mayor. "
-        f"Responde SIEMPRE en español (es-ES), frases cortas, tono {tone}, "
-        f"máximo {max_words} palabras. "
+        f"Responde SIEMPRE en espanol (es-ES), frases cortas, tono {tone}, "
+        f"maximo {max_words} palabras. "
         "No inventes datos. Si no sabes algo, di que no lo sabes. "
-        "No des consejos médicos: para cuestiones de salud, di que avisarás al cuidador. "
-        "Responde directamente a la pregunta o petición del paciente."
+        "No des consejos medicos: para cuestiones de salud, di que avisaras al cuidador. "
+        "Responde directamente a la pregunta o peticion del paciente."
     )
 
 
@@ -59,22 +53,22 @@ def _build_user_prompt(
     medical_notes = profile.get("medical_notes", [])
 
     lines = [
-        f"Datos del paciente:",
+        "Datos del paciente:",
         f"- Nombre: {name}",
         f"- Domicilio: {address}",
         f"- Cuidadores: {caregivers}",
     ]
     if medical_notes:
-        lines.append("- Notas médicas:")
-        for n in medical_notes:
-            lines.append(f"    · {n}")
+        lines.append("- Notas medicas:")
+        for note in medical_notes:
+            lines.append(f"    - {note}")
 
     if journal_entries:
         lines.append("")
-        lines.append("Resumen reciente del paciente (últimas 24 h):")
-        for e in journal_entries:
-            when = e.created_at.strftime("%H:%M") if e.created_at else ""
-            lines.append(f"- [{when}] {e.summary_text}")
+        lines.append(f"Journal del paciente (ultimas {config.JOURNAL_RETENTION_HOURS} h):")
+        for entry in journal_entries:
+            when = entry.created_at.strftime("%H:%M") if entry.created_at else ""
+            lines.append(f"- [{when}] {entry.summary_text}")
 
     if stm:
         lines.append("")
@@ -84,19 +78,19 @@ def _build_user_prompt(
 
     if full_transcript:
         lines.append("")
-        lines.append("Transcripción completa del audio actual (incluye a todas las personas presentes):")
+        lines.append("Transcripcion completa del audio actual (incluye a todas las personas presentes):")
         lines.append(full_transcript)
 
     lines.append("")
     if patient_text:
-        lines.append(f'Pregunta/petición del paciente: "{patient_text}"')
+        lines.append(f'Pregunta/peticion del paciente: "{patient_text}"')
     else:
         lines.append(
             "El paciente ha llamado al asistente. Usa la memoria reciente y "
-            "el contexto de la conversación para inferir qué necesita y "
-            "respóndele directamente."
+            "el contexto de la conversacion para inferir que necesita y "
+            "respondele directamente."
         )
-    lines.append("Responde directamente al paciente, sin preámbulos.")
+    lines.append("Responde directamente al paciente, sin preambulos.")
     return "\n".join(lines)
 
 
@@ -118,13 +112,12 @@ async def answer_patient_query(
     )
     context_data = ctx.context_json if ctx else {}
 
-    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=24)
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=config.JOURNAL_RETENTION_HOURS)
     recent_entries = (
         db.query(JournalEntry)
         .filter(JournalEntry.patient_id == patient.id)
         .filter(JournalEntry.created_at >= cutoff)
         .order_by(JournalEntry.created_at.desc())
-        .limit(10)
         .all()
     )
     # Chronological order reads more naturally in the prompt.
@@ -132,7 +125,10 @@ async def answer_patient_query(
 
     system = _build_system_prompt(context_data)
     user_prompt = _build_user_prompt(
-        context_data, patient_text, recent_entries, stm,
+        context_data,
+        patient_text,
+        recent_entries,
+        stm,
         full_transcript=full_transcript,
     )
 
@@ -141,8 +137,8 @@ async def answer_patient_query(
         reply = await llm.generate(system, user_prompt)
         reply = (reply or "").strip()
         if not reply:
-            reply = "Lo siento, no he entendido. ¿Puedes repetirlo?"
+            reply = "Lo siento, no he entendido. Puedes repetirlo?"
         return {"reply_text": reply}
-    except Exception as e:
-        logger.warning(f"Assistant LLM failed: {e}")
+    except Exception as exc:
+        logger.warning(f"Assistant LLM failed: {exc}")
         return {"reply_text": "Lo siento, ahora no puedo responder. Ya aviso a tu cuidador."}

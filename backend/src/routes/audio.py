@@ -293,7 +293,7 @@ async def process_audio_chunk(
                         _store_assistant_transcript(db, patient.id, assistant_out.get("reply_text"))
                     db.commit()
 
-                    if should_schedule_journal(patient.id):
+                    if should_schedule_journal(patient.id, db=db):
                         background_tasks.add_task(summarize_and_append, patient.id)
 
                     return AudioChunkResponse(
@@ -355,7 +355,7 @@ async def process_audio_chunk(
                 print(f"\033[96m  >> TOTAL:          {time.time() - t0:.2f}s\033[0m")
                 print(f"\033[96m{'='*60}\033[0m\n")
 
-                if should_schedule_journal(patient.id):
+                if should_schedule_journal(patient.id, db=db):
                     background_tasks.add_task(summarize_and_append, patient.id)
 
                 return AudioChunkResponse(

@@ -1,21 +1,18 @@
 """
 Memory layer.
 
-- Short-term memory (STM): rolling window of recent utterances,
-  pulled from the `transcripts` table on demand and injected into the LLM
-  analysis prompt. No new storage.
-  - get_short_term(): returns [PACIENTE], [PACIENTE?] and [ASSISTANT] lines by default.
-  - get_recent_conversation(): returns ALL speakers with tags (for the
-    assistant service, so the LLM has full conversational context).
-- Long-term memory (LTM / journal): LLM-condensed 1-2 sentence summaries of
-  recent conversation, persisted in `journal_entries`. Generated in a FastAPI
-  BackgroundTask so it never adds latency to the audio-chunk response.
+- Short-term memory (STM): rolling window of recent utterances pulled from the
+  transcripts table on demand and injected into LLM prompts. No extra storage.
+- Long-term memory (LTM / journal): LLM-condensed summaries of the selected STM
+  material, persisted in journal_entries. Generated in a FastAPI BackgroundTask
+  so it never adds latency to the audio-chunk response.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from threading import Lock
 
@@ -31,28 +28,42 @@ from .llm import get_llm_provider
 logger = logging.getLogger(__name__)
 
 
-# Matches memory-relevant tags until the next tag or end of line.
-_ANY_TAG = r"(?:PACIENTE\?|PACIENTE|OTRO|ASSISTANT)"
+_TAG_NAME = r"PACIENTE\?|PACIENTE|OTRO|ASSISTANT"
+_ANY_TAG = rf"(?:{_TAG_NAME})"
 _MEMORY_LINE = re.compile(
-    rf"\[(PACIENTE\?|PACIENTE|ASSISTANT)\]\s*(.+?)(?=\s*\[{_ANY_TAG}\]|\s*$)",
+    rf"\[({_TAG_NAME})\]\s*(.+?)(?=\s*\[{_ANY_TAG}\]|\s*$)",
     re.DOTALL,
 )
 
-# Per-patient guard for scheduling journal summarization. Keyed by patient_id,
-# value is the last UTC datetime when a summarization was *scheduled*.
-_last_journal_ts: dict[int, datetime] = {}
-_last_journal_lock = Lock()
+_journal_in_flight: set[int] = set()
+_journal_in_flight_lock = Lock()
+
+
+@dataclass(frozen=True)
+class _STMItem:
+    transcript_id: int
+    started_at: datetime
+    tag: str
+    text: str
+    line: str
+
+
+def _naive_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def _extract_memory_lines(
     transcript_text: str,
     include_assistant: bool = True,
+    include_other: bool = False,
     include_uncertain_patient: bool = True,
 ) -> list[tuple[str, str]]:
-    """Return memory-relevant fragments from a tagged transcript.
+    """Return tagged fragments that are relevant to the requested memory view.
 
-    For transcripts without speaker tags (no voice sample enrolled) we
-    treat the whole text as patient-spoken.
+    For transcripts without speaker tags (for example, before voice enrollment)
+    the whole text is treated as patient-spoken.
     """
     if not transcript_text:
         return []
@@ -60,16 +71,83 @@ def _extract_memory_lines(
         text = transcript_text.strip()
         return [("PACIENTE", text)] if text else []
 
-    allowed = {"PACIENTE", "ASSISTANT"} if include_assistant else {"PACIENTE"}
+    allowed = {"PACIENTE"}
     if include_uncertain_patient:
         allowed.add("PACIENTE?")
+    if include_assistant:
+        allowed.add("ASSISTANT")
+    if include_other:
+        allowed.add("OTRO")
+
     lines: list[tuple[str, str]] = []
-    for m in _MEMORY_LINE.finditer(transcript_text):
-        tag = m.group(1)
-        text = m.group(2).strip()
+    for match in _MEMORY_LINE.finditer(transcript_text):
+        tag = match.group(1)
+        text = match.group(2).strip()
         if tag in allowed and text:
             lines.append((tag, text))
     return lines
+
+
+def _get_short_term_items(
+    patient_id: int,
+    db: Session,
+    now: datetime | None = None,
+    window_minutes: int | None = None,
+    max_utterances: int | None = None,
+    max_chars: int | None = None,
+    exclude_transcript_id: int | None = None,
+    include_assistant: bool = True,
+    include_other: bool = False,
+    include_uncertain_patient: bool = True,
+) -> list[_STMItem]:
+    """Return the exact STM items selected after line and char caps.
+
+    Items are returned oldest-first, matching the final LLM-readable STM text.
+    """
+    now = now or datetime.now(timezone.utc)
+    window_minutes = window_minutes or config.STM_WINDOW_MINUTES
+    max_utterances = max_utterances or config.STM_MAX_UTTERANCES
+    max_chars = max_chars or config.STM_MAX_CHARS
+
+    cutoff = _naive_utc(now) - timedelta(minutes=window_minutes)
+    query = (
+        db.query(Transcript)
+        .filter(Transcript.patient_id == patient_id)
+        .filter(Transcript.started_at >= cutoff)
+    )
+    if exclude_transcript_id is not None:
+        query = query.filter(Transcript.id != exclude_transcript_id)
+
+    rows = query.order_by(Transcript.started_at.desc()).limit(max_utterances * 4).all()
+
+    items: list[_STMItem] = []
+    for row in rows:
+        ts = row.started_at.strftime("%H:%M")
+        fragments = _extract_memory_lines(
+            row.transcript_text,
+            include_assistant=include_assistant,
+            include_other=include_other,
+            include_uncertain_patient=include_uncertain_patient,
+        )
+        for tag, text in fragments:
+            line = f"[{ts}] [{tag}] {text}"
+            items.append(_STMItem(row.id, row.started_at, tag, text, line))
+            if len(items) >= max_utterances:
+                break
+        if len(items) >= max_utterances:
+            break
+
+    if not items:
+        return []
+
+    items.reverse()
+
+    total = sum(len(item.line) + 1 for item in items)
+    while total > max_chars and len(items) > 1:
+        dropped = items.pop(0)
+        total -= len(dropped.line) + 1
+
+    return items
 
 
 def get_short_term(
@@ -81,99 +159,142 @@ def get_short_term(
     max_chars: int | None = None,
     exclude_transcript_id: int | None = None,
     include_assistant: bool = True,
+    include_other: bool = False,
 ) -> str:
-    """Build the STM string for a patient.
+    """Build the STM string for a patient, oldest-first.
 
-    Format: one line per utterance, newest first:
-        [HH:MM] texto
-
-    Truncated oldest-first to respect max_chars. Returns "" if there is
-    nothing to show.
+    Format: one line per utterance:
+        [HH:MM] [TAG] text
     """
-    now = now or datetime.now(timezone.utc)
-    window_minutes = window_minutes or config.STM_WINDOW_MINUTES
-    max_utterances = max_utterances or config.STM_MAX_UTTERANCES
-    max_chars = max_chars or config.STM_MAX_CHARS
-
-    cutoff = now - timedelta(minutes=window_minutes)
-    # started_at is stored naive UTC; strip tzinfo for the comparison.
-    cutoff_naive = cutoff.replace(tzinfo=None)
-
-    q = (
-        db.query(Transcript)
-        .filter(Transcript.patient_id == patient_id)
-        .filter(Transcript.started_at >= cutoff_naive)
+    items = _get_short_term_items(
+        patient_id,
+        db,
+        now=now,
+        window_minutes=window_minutes,
+        max_utterances=max_utterances,
+        max_chars=max_chars,
+        exclude_transcript_id=exclude_transcript_id,
+        include_assistant=include_assistant,
+        include_other=include_other,
     )
-    if exclude_transcript_id is not None:
-        q = q.filter(Transcript.id != exclude_transcript_id)
-    rows = q.order_by(Transcript.started_at.desc()).limit(max_utterances * 3).all()
-
-    lines: list[str] = []  # newest-first
-    for row in rows:
-        ts = row.started_at.strftime("%H:%M")
-        for tag, frag in _extract_memory_lines(row.transcript_text, include_assistant=include_assistant):
-            lines.append(f"[{ts}] [{tag}] {frag}")
-            if len(lines) >= max_utterances:
-                break
-        if len(lines) >= max_utterances:
-            break
-
-    if not lines:
-        return ""
-
-    # Oldest-first is easier for an LLM to read as a narrative.
-    lines.reverse()
-
-    # Enforce char cap by dropping oldest until it fits.
-    total = sum(len(l) + 1 for l in lines)
-    while total > max_chars and len(lines) > 1:
-        dropped = lines.pop(0)
-        total -= len(dropped) + 1
-
-    return "\n".join(lines)
+    return "\n".join(item.line for item in items)
 
 
-def should_schedule_journal(patient_id: int, now: datetime | None = None) -> bool:
-    """Check whether enough time has passed since the last journal run for this patient."""
-    now = now or datetime.now(timezone.utc)
-    interval = timedelta(minutes=config.JOURNAL_INTERVAL_MINUTES)
-    with _last_journal_lock:
-        last = _last_journal_ts.get(patient_id)
-        if last is not None and now - last < interval:
-            return False
-        _last_journal_ts[patient_id] = now
+def _journal_summary_items(
+    patient_id: int,
+    db: Session,
+    now: datetime | None = None,
+) -> list[_STMItem]:
+    return _get_short_term_items(
+        patient_id,
+        db,
+        now=now,
+        include_assistant=True,
+        include_other=True,
+        include_uncertain_patient=True,
+    )
+
+
+def _journal_items_have_new_coverage(patient_id: int, db: Session, items: list[_STMItem]) -> bool:
+    if len(items) < config.JOURNAL_MIN_UTTERANCES:
+        return False
+
+    latest_covers_end = (
+        db.query(JournalEntry.covers_end)
+        .filter(JournalEntry.patient_id == patient_id)
+        .order_by(JournalEntry.covers_end.desc())
+        .limit(1)
+        .scalar()
+    )
+    if latest_covers_end is None:
         return True
 
+    latest_covers_end = _naive_utc(latest_covers_end)
+    return all(_naive_utc(item.started_at) > latest_covers_end for item in items)
 
-async def summarize_and_append(patient_id: int) -> None:
-    """Background task: condense the current STM into one journal entry.
 
-    Opens its own DB session so it is decoupled from the request.
-    Silently no-ops when there is not enough material.
+def should_schedule_journal(
+    patient_id: int,
+    db: Session | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Return True when the selected STM has fully turned over.
+
+    The check is persistent: it compares current selected STM item timestamps
+    with the latest journal coverage instead of a process-local timer.
     """
-    db: Session = SessionLocal()
+    owns_session = db is None
+    db = db or SessionLocal()
     try:
-        now = datetime.now(timezone.utc)
-        stm = get_short_term(patient_id, db, now=now, include_assistant=False)
-        if not stm:
+        items = _journal_summary_items(patient_id, db, now=now)
+        if not _journal_items_have_new_coverage(patient_id, db, items):
+            return False
+
+        with _journal_in_flight_lock:
+            if patient_id in _journal_in_flight:
+                return False
+            _journal_in_flight.add(patient_id)
+        return True
+    except Exception as exc:
+        logger.warning(f"[journal] patient={patient_id}: schedule check failed: {exc}")
+        return False
+    finally:
+        if owns_session:
+            db.close()
+
+
+def _release_journal_guard(patient_id: int) -> None:
+    with _journal_in_flight_lock:
+        _journal_in_flight.discard(patient_id)
+
+
+def _trim_summary(summary: str) -> str:
+    max_chars = config.JOURNAL_ENTRY_MAX_CHARS
+    if len(summary) <= max_chars:
+        return summary
+    if max_chars <= 3:
+        return summary[:max_chars]
+    return summary[: max_chars - 3].rstrip() + "..."
+
+
+async def summarize_and_append(
+    patient_id: int,
+    db: Session | None = None,
+    now: datetime | None = None,
+) -> None:
+    """Background task: condense the current selected STM into one journal entry.
+
+    Silently no-ops when there is no useful material or the current STM still
+    overlaps the latest journal coverage.
+    """
+    owns_session = db is None
+    db = db or SessionLocal()
+    try:
+        now = now or datetime.now(timezone.utc)
+        items = _journal_summary_items(patient_id, db, now=now)
+        if not items:
             logger.debug(f"[journal] patient={patient_id}: STM empty, skipping.")
             return
-
-        # Require at least 3 utterances worth of material.
-        if stm.count("\n") < 2:
-            logger.debug(f"[journal] patient={patient_id}: STM too small ({stm.count(chr(10)) + 1} lines), skipping.")
+        if len(items) < config.JOURNAL_MIN_UTTERANCES:
+            logger.debug(f"[journal] patient={patient_id}: STM too small ({len(items)} lines), skipping.")
+            return
+        if not _journal_items_have_new_coverage(patient_id, db, items):
+            logger.debug(f"[journal] patient={patient_id}: STM still overlaps last journal entry, skipping.")
             return
 
-        # Ask the LLM for a short third-person summary.
+        stm = "\n".join(item.line for item in items)
         system = (
-            "Eres un asistente que escribe un diario del día de una persona con demencia. "
-            "Resume lo que ha hecho o dicho en tercera persona, en 1 o 2 frases cortas, "
-            "neutro y factual, máximo 30 palabras. Responde SOLO con el resumen, sin comillas ni prefijos."
+            "Eres un asistente que escribe un diario breve para el cuidador de una persona con demencia. "
+            "Resume la interaccion en tercera persona, de forma neutral y factual, en 1 o 2 frases cortas. "
+            "Incluye informacion util dicha por el paciente, por otras personas y por el asistente si aporta contexto. "
+            "Responde SOLO con el resumen, sin comillas ni prefijos."
         )
         user_msg = (
-            "Transcripciones recientes (hora entre corchetes, frases del paciente o posible paciente):\n"
-            "Las lineas [PACIENTE?] son posibles frases del paciente con identificacion de voz dudosa; "
-            "no las presentes como hechos seguros si no hay contexto suficiente.\n"
+            "Transcripciones recientes con hora y etiqueta de hablante:\n"
+            "- [PACIENTE] es el paciente identificado.\n"
+            "- [PACIENTE?] es posible paciente con identificacion de voz dudosa; no lo presentes como hecho seguro sin contexto.\n"
+            "- [ASSISTANT] son respuestas habladas del sistema.\n"
+            "- [OTRO] son otras personas o sonido transcrito del entorno.\n\n"
             f"{stm}\n\n"
             "Escribe una entrada de diario."
         )
@@ -183,35 +304,25 @@ async def summarize_and_append(patient_id: int) -> None:
         if not summary:
             logger.debug(f"[journal] patient={patient_id}: LLM returned empty summary.")
             return
-        if len(summary) > 500:
-            summary = summary[:497].rstrip() + "..."
-
-        # covers_start / covers_end: the window we summarized over.
-        covers_end_naive = now.replace(tzinfo=None)
-        covers_start_naive = (now - timedelta(minutes=config.STM_WINDOW_MINUTES)).replace(tzinfo=None)
+        summary = _trim_summary(summary)
 
         entry = JournalEntry(
             patient_id=patient_id,
-            covers_start=covers_start_naive,
-            covers_end=covers_end_naive,
+            covers_start=_naive_utc(items[0].started_at),
+            covers_end=_naive_utc(items[-1].started_at),
             summary_text=summary,
         )
         db.add(entry)
         db.flush()
 
-        # Retention: drop entries older than the retention window, then hard-cap rows.
         retention_cutoff = now - timedelta(hours=config.JOURNAL_RETENTION_HOURS)
         db.execute(
             delete(JournalEntry)
             .where(JournalEntry.patient_id == patient_id)
-            .where(JournalEntry.created_at < retention_cutoff.replace(tzinfo=None))
+            .where(JournalEntry.created_at < _naive_utc(retention_cutoff))
         )
 
-        total = (
-            db.query(JournalEntry)
-            .filter(JournalEntry.patient_id == patient_id)
-            .count()
-        )
+        total = db.query(JournalEntry).filter(JournalEntry.patient_id == patient_id).count()
         if total > config.JOURNAL_MAX_ENTRIES:
             excess = total - config.JOURNAL_MAX_ENTRIES
             oldest = (
@@ -221,22 +332,16 @@ async def summarize_and_append(patient_id: int) -> None:
                 .limit(excess)
                 .all()
             )
-            for o in oldest:
-                db.delete(o)
+            for entry_to_delete in oldest:
+                db.delete(entry_to_delete)
 
-        # Transcript retention: time-based + hard row cap per patient.
-        # Cheap because it piggybacks on this already-scheduled task.
         tx_cutoff = now - timedelta(days=config.TRANSCRIPT_RETENTION_DAYS)
         db.execute(
             delete(Transcript)
             .where(Transcript.patient_id == patient_id)
-            .where(Transcript.created_at < tx_cutoff.replace(tzinfo=None))
+            .where(Transcript.created_at < _naive_utc(tx_cutoff))
         )
-        tx_total = (
-            db.query(Transcript)
-            .filter(Transcript.patient_id == patient_id)
-            .count()
-        )
+        tx_total = db.query(Transcript).filter(Transcript.patient_id == patient_id).count()
         if tx_total > config.TRANSCRIPT_MAX_ROWS:
             tx_excess = tx_total - config.TRANSCRIPT_MAX_ROWS
             tx_oldest = (
@@ -246,13 +351,15 @@ async def summarize_and_append(patient_id: int) -> None:
                 .limit(tx_excess)
                 .all()
             )
-            for t in tx_oldest:
-                db.delete(t)
+            for transcript in tx_oldest:
+                db.delete(transcript)
 
         db.commit()
         logger.info(f"[journal] patient={patient_id}: stored entry '{summary[:80]}...'")
-    except Exception as e:
+    except Exception as exc:
         db.rollback()
-        logger.warning(f"[journal] patient={patient_id}: summarization failed: {e}")
+        logger.warning(f"[journal] patient={patient_id}: summarization failed: {exc}")
     finally:
-        db.close()
+        _release_journal_guard(patient_id)
+        if owns_session:
+            db.close()

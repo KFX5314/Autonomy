@@ -240,7 +240,7 @@ mariadb -u root -p < init_test_db.sql
 python -m pytest
 ```
 
-Los audios reales de validación se guardan fuera de Git. Consulta `docs/TESTING.md` para preparar la base de test, ejecutar marcadores y documentar KPIs.
+Los audios reales de validación se guardan fuera de Git. Para la validación local opcional, graba un audio propio y colócalo en `backend/tests/fixtures/private_audio/`; si la carpeta está vacía, el test se salta con un aviso claro. Consulta `docs/TESTING.md` para preparar la base de test, ejecutar marcadores y documentar KPIs.
 
 ## Configuración Tailscale
 
@@ -375,9 +375,10 @@ TFG-DEMENCIA/
 | `STM_WINDOW_MINUTES` | `5` | Ventana de memoria a corto plazo |
 | `STM_MAX_UTTERANCES` | `12` | Máximo de frases en STM |
 | `STM_MAX_CHARS` | `1500` | Límite de caracteres en STM |
-| `JOURNAL_INTERVAL_MINUTES` | `5` | Intervalo mínimo entre resúmenes de diario |
+| `JOURNAL_MIN_UTTERANCES` | `3` | Mínimo de líneas STM seleccionadas para compactar al diario |
+| `JOURNAL_ENTRY_MAX_CHARS` | `240` | Máximo de caracteres guardados por entrada de diario |
 | `JOURNAL_RETENTION_HOURS` | `24` | Retención del diario |
-| `JOURNAL_MAX_ENTRIES` | `200` | Máximo de entradas de diario por paciente |
+| `JOURNAL_MAX_ENTRIES` | `50` | Máximo de entradas de diario por paciente |
 | `TRANSCRIPT_RETENTION_DAYS` | `14` | Retención temporal de transcripciones |
 | `TRANSCRIPT_MAX_ROWS` | `5000` | Máximo de transcripciones por paciente |
 | `ALERTS_AUDIO_DIR` | `backend/data/alert_audio` | Directorio de audio archivado en alertas |

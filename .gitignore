@@ -51,6 +51,8 @@ backend/data/alert_audio/
 
 # Audio de pruebas locales (voz y salud son datos sensibles)
 backend/tests/local_audio/
+backend/tests/fixtures/private_audio/*
+!backend/tests/fixtures/private_audio/README.md
 *.wav
 *.m4a
 *.mp3

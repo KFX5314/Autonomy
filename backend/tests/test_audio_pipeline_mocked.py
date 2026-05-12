@@ -45,7 +45,7 @@ def test_audio_chunk_creates_alert_with_mocked_models(
     _enroll_test_voice_sample(db_session, "audio_patient")
 
     monkeypatch.setattr(audio_route.config, "ALERTS_AUDIO_DIR", str(tmp_path))
-    monkeypatch.setattr(audio_route, "should_schedule_journal", lambda patient_id: False)
+    monkeypatch.setattr(audio_route, "should_schedule_journal", lambda *args, **kwargs: False)
     monkeypatch.setattr(audio_route, "enforce_patient_audio_cap", lambda db, patient_id: None)
     monkeypatch.setattr(
         audio_route.subprocess,
