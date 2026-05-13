@@ -190,9 +190,13 @@ Después lanza Expo:
 .\scripts\run-frontend.ps1
 ```
 
-El script instala dependencias si faltan. Si detecta IP de Tailscale, la usa para Expo; si no, usa modo tunnel. Este fallback no equivale a modo LAN: depende del túnel de Expo y de conectividad externa. Si quieres probar desde otros dispositivos en la misma Wi-Fi sin Tailscale, regenera primero `frontend/app/.env` con `.\scripts\update-frontend-env.ps1` para que `EXPO_PUBLIC_SERVER_URL` apunte a la IP LAN del PC y arranca Expo con `npx expo start --host lan` desde `frontend/app`.
+El script instala dependencias si faltan. Si detecta una IP activa de Tailscale, la usa para Expo; si no, usa la IP LAN del PC y arranca con `--host lan`. Si necesitas tunnel de Expo/Ngrok, puedes pedirlo explicitamente:
 
-Si el `.env` conserva una URL `http://100.x.y.z:8000` y Tailscale no está activo, la app móvil no podrá llegar al backend aunque el móvil y el PC estén en la misma red.
+```powershell
+.\scripts\run-frontend.ps1 -Tunnel
+```
+
+Si arrancas Expo manualmente y el `.env` conserva una URL `http://100.x.y.z:8000` con Tailscale apagado, la app móvil no podrá llegar al backend aunque el móvil y el PC estén en la misma red. En ese caso ejecuta `.\scripts\update-frontend-env.ps1` para reescribirlo con la IP LAN.
 
 ## Scripts disponibles
 

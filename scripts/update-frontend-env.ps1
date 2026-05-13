@@ -1,62 +1,122 @@
 # scripts/update-frontend-env.ps1
 # Detects the best IP for the frontend to reach the backend.
-# Prefers Tailscale IP (works across networks), falls back to LAN IP.
+# Prefers Tailscale IP when active, otherwise uses the local LAN IPv4.
 
 $ErrorActionPreference = "Stop"
 
 $frontendEnvPath = Join-Path $PSScriptRoot "..\frontend\app\.env"
 $port = 8000
 
-# ─── 1. Try Tailscale IP first (works from any network) ───────────
-$ip = $null
-$tsIp = tailscale ip -4 2>$null
-if ($tsIp) {
-  $ip = $tsIp.Trim()
-  Write-Host "Using Tailscale IP: $ip" -ForegroundColor Cyan
+function Get-TailscaleIPv4 {
+  if (-not (Get-Command tailscale -ErrorAction SilentlyContinue)) {
+    return $null
+  }
+
+  try {
+    $raw = & tailscale ip -4 2>$null
+    if ($LASTEXITCODE -ne 0) {
+      return $null
+    }
+    $ip = $raw |
+      Where-Object { $_ -match '^\d{1,3}(\.\d{1,3}){3}$' } |
+      Select-Object -First 1
+    if ($ip) {
+      return $ip.Trim()
+    }
+  } catch {
+    return $null
+  }
+
+  return $null
 }
 
-# ─── 2. Fallback to LAN IP ────────────────────────────────────────
-if (-not $ip) {
-  Write-Host "No Tailscale IP found, falling back to LAN IP" -ForegroundColor Yellow
+function Get-LanIPv4 {
+  $ignoredAdapters = "Loopback|vEthernet|Virtual|VMware|VirtualBox|Tailscale|ZeroTier|Nord|OpenVPN|WireGuard|VPN|Bluetooth"
+  $privatePattern = '^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)'
 
-  # Pull IPv4 addresses excluding loopback + APIPA
-  $ips = Get-NetIPAddress -AddressFamily IPv4 |
-    Where-Object {
-      $_.IPAddress -notlike "127.*" -and
-      $_.IPAddress -notlike "169.254.*"
-    } |
-    Select-Object InterfaceAlias, IPAddress, PrefixOrigin, AddressState
+  try {
+    $ips = Get-NetIPAddress -AddressFamily IPv4 |
+      Where-Object {
+        $_.IPAddress -notlike "127.*" -and
+        $_.IPAddress -notlike "169.254.*" -and
+        $_.InterfaceAlias -notmatch $ignoredAdapters
+      } |
+      Select-Object InterfaceAlias, IPAddress, PrefixOrigin, AddressState
+  } catch {
+    $ips = @()
+  }
 
-  # Prefer Wi-Fi / Ethernet first (avoid VPN adapters like NordLynx/OpenVPN)
+  if (-not $ips) {
+    $rawIpconfig = ipconfig
+    $candidates = @()
+    $currentAdapter = ""
+    foreach ($line in $rawIpconfig) {
+      $trimmed = $line.Trim()
+      if ($trimmed -match '^(.*Adaptador.*|.*adapter.*):$') {
+        $currentAdapter = $trimmed.TrimEnd(":")
+        continue
+      }
+      $match = [regex]::Match($line, 'IPv4[^:]*:\s*(\d{1,3}(?:\.\d{1,3}){3})')
+      if (-not $match.Success -or -not $currentAdapter -or $currentAdapter -match $ignoredAdapters) {
+        continue
+      }
+      $candidate = $match.Groups[1].Value
+      if ($candidate -match $privatePattern -and $candidate -notlike "169.254.*") {
+        $candidates += [pscustomobject]@{
+          InterfaceAlias = $currentAdapter
+          IPAddress = $candidate
+          PrefixOrigin = ""
+          AddressState = "Preferred"
+        }
+      }
+    }
+    $preferredIpconfig = $candidates | Where-Object {
+      $_.InterfaceAlias -match "Wi-?Fi|Wireless|Ethernet"
+    } | Select-Object -First 1
+    if (-not $preferredIpconfig) {
+      $preferredIpconfig = $candidates | Select-Object -First 1
+    }
+    if ($preferredIpconfig) {
+      return $preferredIpconfig
+    }
+  }
+
   $preferred = $ips | Where-Object {
     $_.AddressState -eq "Preferred" -and
+    $_.IPAddress -match $privatePattern -and
     ($_.InterfaceAlias -match "Wi-?Fi|Wireless|Ethernet")
   } | Select-Object -First 1
 
-  # Fallback: any Preferred address that looks like private LAN
   if (-not $preferred) {
     $preferred = $ips | Where-Object {
       $_.AddressState -eq "Preferred" -and
-      (
-        $_.IPAddress -match '^192\.168\.' -or
-        $_.IPAddress -match '^10\.' -or
-        $_.IPAddress -match '^172\.(1[6-9]|2[0-9]|3[0-1])\.'
-      )
+      $_.IPAddress -match $privatePattern
     } | Select-Object -First 1
   }
 
   if (-not $preferred) {
-    throw "No suitable IPv4 address found."
+    throw "No suitable LAN IPv4 address found. Connect to Wi-Fi/Ethernet or run Expo manually with --tunnel."
   }
-  $ip = $preferred.IPAddress
+
+  return $preferred
 }
+
+$ip = Get-TailscaleIPv4
+if ($ip) {
+  Write-Host "Using Tailscale IP: $ip" -ForegroundColor Cyan
+} else {
+  $lan = Get-LanIPv4
+  $ip = $lan.IPAddress
+  Write-Host "No active Tailscale IP found; using LAN IP: $ip ($($lan.InterfaceAlias))" -ForegroundColor Yellow
+}
+
 $serverUrl = "http://$ip`:$port"
 
-# Ensure target directory exists
 $dir = Split-Path $frontendEnvPath -Parent
-if (!(Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+if (!(Test-Path $dir)) {
+  New-Item -ItemType Directory -Path $dir | Out-Null
+}
 
-# Write/update server URL while preserving any optional frontend tuning values.
 $existingLines = @()
 if (Test-Path $frontendEnvPath) {
   $existingLines = Get-Content -Path $frontendEnvPath |
