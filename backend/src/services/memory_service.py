@@ -233,8 +233,14 @@ def _journal_summary_items(
     )
 
 
+def _journal_has_patient_or_assistant_material(items: list[_STMItem]) -> bool:
+    return any(item.tag in {"PACIENTE", "PACIENTE?", "ASSISTANT"} for item in items)
+
+
 def _journal_items_have_new_coverage(patient_id: int, db: Session, items: list[_STMItem]) -> bool:
     if len(items) < config.JOURNAL_MIN_UTTERANCES:
+        return False
+    if not _journal_has_patient_or_assistant_material(items):
         return False
 
     latest_covers_end = (
@@ -316,6 +322,9 @@ async def summarize_and_append(
         if len(items) < config.JOURNAL_MIN_UTTERANCES:
             logger.debug(f"[journal] patient={patient_id}: STM too small ({len(items)} lines), skipping.")
             return
+        if not _journal_has_patient_or_assistant_material(items):
+            logger.debug(f"[journal] patient={patient_id}: STM only has [OTRO] material, skipping.")
+            return
         if not _journal_items_have_new_coverage(patient_id, db, items):
             logger.debug(f"[journal] patient={patient_id}: STM still overlaps last journal entry, skipping.")
             return
@@ -323,8 +332,9 @@ async def summarize_and_append(
         stm = "\n".join(item.line for item in items)
         system = (
             "Eres un asistente que escribe un diario breve para el cuidador de una persona con demencia. "
-            "Resume la interaccion en tercera persona, de forma neutral y factual, en 1 o 2 frases cortas. "
-            "Incluye informacion util dicha por el paciente, por otras personas y por el asistente si aporta contexto. "
+            "Resume solo actividad del paciente o respuestas del asistente, en tercera persona, de forma neutral "
+            "y factual, en 1 o 2 frases cortas. Usa las lineas [OTRO] solo como contexto; no las atribuyas "
+            "al paciente, al cuidador ni a ningun rol concreto si la etiqueta no lo dice. "
             "Responde SOLO con el resumen, sin comillas ni prefijos."
         )
         user_msg = (
@@ -332,7 +342,7 @@ async def summarize_and_append(
             "- [PACIENTE] es el paciente identificado.\n"
             "- [PACIENTE?] es posible paciente con identificacion de voz dudosa; no lo presentes como hecho seguro sin contexto.\n"
             "- [ASSISTANT] son respuestas habladas del sistema.\n"
-            "- [OTRO] son otras personas o sonido transcrito del entorno.\n\n"
+            "- [OTRO] son otras personas o sonido transcrito del entorno; usalo solo como contexto y no infieras que es cuidador, familiar o paciente.\n\n"
             f"{stm}\n\n"
             "Escribe una entrada de diario."
         )

@@ -82,6 +82,28 @@ async def test_silence_only_stm_skips_journal_without_llm(db_session, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_other_only_stm_skips_journal_without_llm(db_session, monkeypatch):
+    patient = _make_patient(db_session)
+    now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
+    _add_transcript(
+        db_session,
+        patient.id,
+        now.replace(tzinfo=None) - timedelta(seconds=10),
+        "[OTRO] Chao, buenas noches.",
+    )
+    db_session.commit()
+
+    fake = FakeLLM("No deberia llamarse.")
+    monkeypatch.setattr(memory_service, "get_llm_provider", lambda: fake)
+
+    assert memory_service.should_schedule_journal(patient.id, db=db_session, now=now) is False
+    await memory_service.summarize_and_append(patient.id, db=db_session, now=now)
+
+    assert fake.calls == []
+    assert db_session.query(JournalEntry).filter(JournalEntry.patient_id == patient.id).count() == 0
+
+
+@pytest.mark.asyncio
 async def test_sparse_new_stm_still_creates_journal_entry(db_session, monkeypatch):
     patient = _make_patient(db_session)
     now = datetime(2026, 5, 12, 12, 0, tzinfo=timezone.utc)
