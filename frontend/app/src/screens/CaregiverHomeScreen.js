@@ -27,9 +27,43 @@ const { caregiver } = appConfig;
 
 function PatientActionButton({ icon, label, onPress, color }) {
   return (
-    <Pressable style={[styles.patientActionBtn, { borderColor: color }]} onPress={onPress}>
-      <Text style={[styles.patientActionIcon, { color }]}>{icon}</Text>
+    <Pressable
+      style={({ pressed }) => [
+        styles.patientActionBtn,
+        { borderColor: color },
+        pressed && styles.patientActionBtnPressed,
+      ]}
+      onPress={onPress}
+    >
+      {icon === "live" ? (
+        <LiveSignalIcon color={color} />
+      ) : (
+        <Text style={[styles.patientActionIcon, { color }]}>{icon}</Text>
+      )}
       <Text style={styles.patientActionLabel}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function LiveSignalIcon({ color }) {
+  return (
+    <View style={styles.liveSignalIcon}>
+      <View style={[styles.liveSignalDot, { backgroundColor: color }]} />
+      <View style={[styles.liveSignalBar, { height: 8, backgroundColor: color }]} />
+      <View style={[styles.liveSignalBar, { height: 14, backgroundColor: color }]} />
+      <View style={[styles.liveSignalBar, { height: 10, backgroundColor: color }]} />
+    </View>
+  );
+}
+
+function CloseButton({ onPress }) {
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.closeBtn, pressed && styles.closeBtnPressed]}
+      onPress={onPress}
+    >
+      <Text style={styles.closeIcon}>×</Text>
+      <Text style={styles.closeLabel}>Cerrar</Text>
     </Pressable>
   );
 }
@@ -196,8 +230,8 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext, onO
                   onPress={() => openPatientDetail(item, "journal")}
                 />
                 <PatientActionButton
-                  icon="⋯"
-                  label="Avanzado"
+                  icon="live"
+                  label="En directo"
                   color={item.ui_color || "#4A90D9"}
                   onPress={() => openPatientDetail(item, "advanced")}
                 />
@@ -208,17 +242,19 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext, onO
       )}
 
       {detailPatient ? (
-        <>
+        <View style={styles.detailPanel}>
           <View style={styles.sectionRow}>
             <Text style={styles.sectionTitle}>{detailPatient.name}</Text>
-            <Pressable style={styles.historyBtn} onPress={closePatientDetail}>
-              <Text style={styles.historyLabel}>Cerrar</Text>
-            </Pressable>
+            <CloseButton onPress={closePatientDetail} />
           </View>
 
           <View style={styles.tabRow}>
             <Pressable
-              style={[styles.tabBtn, detailTab === "journal" && styles.tabBtnActive]}
+              style={({ pressed }) => [
+                styles.tabBtn,
+                detailTab === "journal" && styles.tabBtnActive,
+                pressed && styles.tabBtnPressed,
+              ]}
               onPress={() => setDetailTab("journal")}
             >
               <Text style={[styles.tabText, detailTab === "journal" && styles.tabTextActive]}>
@@ -226,11 +262,15 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext, onO
               </Text>
             </Pressable>
             <Pressable
-              style={[styles.tabBtn, detailTab === "advanced" && styles.tabBtnActive]}
+              style={({ pressed }) => [
+                styles.tabBtn,
+                detailTab === "advanced" && styles.tabBtnActive,
+                pressed && styles.tabBtnPressed,
+              ]}
               onPress={() => setDetailTab("advanced")}
             >
               <Text style={[styles.tabText, detailTab === "advanced" && styles.tabTextActive]}>
-                Avanzado
+                En directo
               </Text>
             </Pressable>
           </View>
@@ -275,12 +315,15 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext, onO
               )}
             />
           )}
-        </>
+        </View>
       ) : showHistory ? (
         <>
           <View style={styles.sectionRow}>
             <Text style={styles.sectionTitle}>Historial de alertas</Text>
-            <Pressable style={styles.historyBtn} onPress={() => setShowHistory(false)}>
+            <Pressable
+              style={({ pressed }) => [styles.historyBtn, pressed && styles.historyBtnPressed]}
+              onPress={() => setShowHistory(false)}
+            >
               <Text style={styles.historyLabel}>Alertas</Text>
             </Pressable>
           </View>
@@ -307,7 +350,10 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext, onO
             <Text style={styles.sectionTitle}>
               Alertas {newAlerts.length > 0 && `(${newAlerts.length} nuevas)`}
             </Text>
-            <Pressable style={styles.historyBtn} onPress={() => setShowHistory(true)}>
+            <Pressable
+              style={({ pressed }) => [styles.historyBtn, pressed && styles.historyBtnPressed]}
+              onPress={() => setShowHistory(true)}
+            >
               <Text style={styles.historyLabel}>Historial</Text>
             </Pressable>
           </View>
@@ -346,37 +392,68 @@ const styles = StyleSheet.create({
   greeting: { fontSize: 22, fontWeight: "700", flex: 1 },
   gearBtn: { paddingHorizontal: 6, paddingVertical: 4 },
   gear: { fontSize: 24, color: "#555" },
-  historyBtn: { flexDirection: "row", alignItems: "center", gap: 4 },
+  historyBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  historyBtnPressed: { backgroundColor: "#DCEAF8" },
   historyLabel: { color: "#4A90D9", fontSize: 14, fontWeight: "600" },
   sectionRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 16, marginBottom: 10 },
   sectionTitle: { fontSize: 18, fontWeight: "700" },
   empty: { color: "#999", marginBottom: 10 },
-  patientList: { marginBottom: 8, maxHeight: 196 },
+  detailPanel: {
+    flex: 1,
+    backgroundColor: "#EEF4FA",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#D9E7F5",
+    paddingHorizontal: 12,
+    paddingBottom: 12,
+  },
+  patientList: { marginBottom: 8, maxHeight: 224 },
   patientCard: {
     backgroundColor: "#fff",
     borderRadius: 14,
-    padding: 14,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 18,
     marginRight: 12,
-    minWidth: 230,
+    minWidth: 236,
     borderWidth: 1,
     borderColor: "#E0E0E0",
     borderLeftWidth: 6,
   },
   patientName: { fontSize: 16, fontWeight: "700" },
   patientUsername: { fontSize: 12, color: "#777", marginTop: 2 },
-  patientActions: { marginTop: 10, gap: 8 },
+  patientActions: { marginTop: 12, gap: 9 },
   patientActionBtn: {
-    minHeight: 38,
+    minHeight: 42,
     borderRadius: 10,
     borderWidth: 1,
     backgroundColor: "#FAFCFF",
-    paddingHorizontal: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
   },
+  patientActionBtnPressed: { backgroundColor: "#E7F0FA" },
   patientActionIcon: { width: 22, textAlign: "center", fontSize: 16, fontWeight: "700" },
   patientActionLabel: { fontSize: 14, color: "#222", fontWeight: "700" },
+  liveSignalIcon: {
+    width: 22,
+    height: 18,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 2,
+  },
+  liveSignalDot: { width: 5, height: 5, borderRadius: 3 },
+  liveSignalBar: { width: 3, borderRadius: 2 },
   tabRow: {
     flexDirection: "row",
     backgroundColor: "#E9EEF5",
@@ -386,6 +463,7 @@ const styles = StyleSheet.create({
   },
   tabBtn: { flex: 1, alignItems: "center", paddingVertical: 9, borderRadius: 8 },
   tabBtnActive: { backgroundColor: "#fff" },
+  tabBtnPressed: { backgroundColor: "#DCE6F2" },
   tabText: { color: "#666", fontSize: 14, fontWeight: "700" },
   tabTextActive: { color: "#4A90D9" },
   alertList: { flex: 1 },
@@ -401,4 +479,16 @@ const styles = StyleSheet.create({
   alertTime: { fontSize: 12, color: "#999", marginBottom: 6 },
   memoryText: { fontSize: 14, color: "#222", lineHeight: 20 },
   memoryMeta: { fontSize: 12, color: "#999", marginTop: 10 },
+  closeBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "#4A90D9",
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  closeBtnPressed: { backgroundColor: "#3B7FC4" },
+  closeIcon: { color: "#fff", fontSize: 18, lineHeight: 18, fontWeight: "800" },
+  closeLabel: { color: "#fff", fontSize: 14, fontWeight: "700" },
 });

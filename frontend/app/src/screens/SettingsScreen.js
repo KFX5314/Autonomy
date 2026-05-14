@@ -60,6 +60,8 @@ export default function SettingsScreen({ navigation, route }) {
     "0.1.0";
 
   const effectiveTtsEnabled = caregiverTtsEnabled && localTtsEnabled;
+  const canGoBack = navigation?.canGoBack?.() ?? false;
+  const backLabel = isPatient ? "Inicio" : "Mis pacientes";
 
   const handleTtsToggle = async (value) => {
     setLocalTtsEnabled(value);
@@ -95,6 +97,16 @@ export default function SettingsScreen({ navigation, route }) {
   return (
     <Animated.View style={[styles.wrap, { opacity: fade, transform: [{ translateY: translate }] }]}>
       <ScrollView contentContainerStyle={styles.content}>
+        {canGoBack ? (
+          <Pressable
+            style={({ pressed }) => [styles.backBtn, pressed && styles.backBtnPressed]}
+            onPress={() => navigation.goBack()}
+            hitSlop={8}
+          >
+            <Text style={styles.backIcon}>←</Text>
+            <Text style={styles.backText}>{backLabel}</Text>
+          </Pressable>
+        ) : null}
         <Text style={styles.title}>Ajustes</Text>
 
         <View style={styles.section}>
@@ -138,15 +150,24 @@ export default function SettingsScreen({ navigation, route }) {
               />
             </View>
           ) : null}
-          <Pressable style={styles.item} onPress={stub("Cambiar contraseña")}>
+          <Pressable
+            style={({ pressed }) => [styles.item, pressed && styles.itemPressed]}
+            onPress={stub("Cambiar contraseña")}
+          >
             <Text style={styles.itemLabel}>Cambiar contraseña</Text>
             <Text style={styles.itemArrow}>›</Text>
           </Pressable>
-          <Pressable style={styles.item} onPress={stub("Tema oscuro")}>
+          <Pressable
+            style={({ pressed }) => [styles.item, pressed && styles.itemPressed]}
+            onPress={stub("Tema oscuro")}
+          >
             <Text style={styles.itemLabel}>Tema oscuro</Text>
             <Text style={styles.itemArrow}>›</Text>
           </Pressable>
-          <Pressable style={styles.item} onPress={stub("Notificaciones")}>
+          <Pressable
+            style={({ pressed }) => [styles.item, pressed && styles.itemPressed]}
+            onPress={stub("Notificaciones")}
+          >
             <Text style={styles.itemLabel}>Notificaciones</Text>
             <Text style={styles.itemArrow}>›</Text>
           </Pressable>
@@ -161,7 +182,7 @@ export default function SettingsScreen({ navigation, route }) {
         </View>
 
         <Pressable
-          style={styles.logoutBtn}
+          style={({ pressed }) => [styles.logoutBtn, pressed && styles.logoutBtnPressed]}
           onPress={handleLogout}
         >
           <Text style={styles.logoutText}>Cerrar sesión</Text>
@@ -174,6 +195,19 @@ export default function SettingsScreen({ navigation, route }) {
 const styles = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: "#F5F7FA" },
   content: { padding: 20, paddingTop: 24, paddingBottom: 60 },
+  backBtn: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    marginBottom: 12,
+  },
+  backBtnPressed: { backgroundColor: "#DCEAF8" },
+  backIcon: { color: "#4A90D9", fontSize: 18, fontWeight: "800" },
+  backText: { color: "#4A90D9", fontSize: 15, fontWeight: "700" },
   title: { fontSize: 26, fontWeight: "700", marginBottom: 20 },
   section: {
     backgroundColor: "#fff",
@@ -212,6 +246,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "#F1F1F1",
   },
+  itemPressed: { backgroundColor: "#EEF4FB" },
   itemTextBlock: { flex: 1, paddingRight: 12 },
   itemLabel: { fontSize: 15, color: "#222" },
   itemHint: { fontSize: 12, color: "#777", marginTop: 3 },
@@ -223,5 +258,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginTop: 10,
   },
+  logoutBtnPressed: { backgroundColor: "#C94032" },
   logoutText: { color: "#fff", fontSize: 17, fontWeight: "700" },
 });

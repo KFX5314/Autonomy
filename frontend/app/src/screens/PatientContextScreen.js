@@ -28,6 +28,7 @@ const COLOR_OPTIONS = ["#4A90D9", "#27AE60", "#E67E22", "#9B59B6", "#E74C3C", "#
 export default function PatientContextScreen({ patient, onBack }) {
   const [context, setContext] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   const [preferredName, setPreferredName] = useState("");
   const [address, setAddress] = useState("");
@@ -47,6 +48,7 @@ export default function PatientContextScreen({ patient, onBack }) {
   const progressAnim = useRef(new Animated.Value(0)).current;
   const timerRef = useRef(null);
   const recordingRef = useRef(null);
+  const savingRef = useRef(false);
 
   useEffect(() => {
     loadContext();
@@ -207,6 +209,10 @@ export default function PatientContextScreen({ patient, onBack }) {
   };
 
   const handleSave = async () => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+
     try {
       const cleanedPhrases = alertPhrases
         .map((p) => ({
@@ -239,9 +245,12 @@ export default function PatientContextScreen({ patient, onBack }) {
       delete newContext.risk_rules;
 
       await updatePatientContext(patient.id, newContext);
-      Alert.alert("Guardado", "Contexto actualizado correctamente.");
-      if (onBack) onBack();
+      Alert.alert("Guardado", "Contexto actualizado correctamente.", [
+        { text: "OK", onPress: () => onBack?.() },
+      ]);
     } catch (e) {
+      savingRef.current = false;
+      setSaving(false);
       Alert.alert("Error", e.message);
     }
   };
@@ -426,8 +435,12 @@ export default function PatientContextScreen({ patient, onBack }) {
         </Pressable>
       )}
 
-      <Pressable style={styles.saveBtn} onPress={handleSave}>
-        <Text style={styles.saveText}>Guardar configuración</Text>
+      <Pressable
+        style={[styles.saveBtn, saving && styles.saveBtnDisabled]}
+        onPress={handleSave}
+        disabled={saving}
+      >
+        <Text style={styles.saveText}>{saving ? "Guardando..." : "Guardar configuración"}</Text>
       </Pressable>
     </ScrollView>
   );
@@ -548,6 +561,7 @@ const styles = StyleSheet.create({
     marginTop: 24,
     marginBottom: 40,
   },
+  saveBtnDisabled: { backgroundColor: "#8DBBE6" },
   saveText: { color: "#fff", fontSize: 17, fontWeight: "700" },
   voiceBtn: {
     backgroundColor: "#27AE60",

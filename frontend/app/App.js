@@ -122,7 +122,13 @@ export default function App() {
               <PatientContextScreen
                 {...props}
                 patient={props.route.params?.patient}
-                onBack={() => props.navigation.goBack()}
+                onBack={() => {
+                  if (props.navigation.canGoBack()) {
+                    props.navigation.goBack();
+                  } else {
+                    props.navigation.navigate("CaregiverHome");
+                  }
+                }}
               />
             )}
           </Stack.Screen>
