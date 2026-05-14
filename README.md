@@ -248,7 +248,7 @@ Si no tienes GPU dedicada activa, o CUDA no está disponible, ejecuta los tests 
 
 ```powershell
 $env:STT_DEVICE="cpu"
-python -m pytest
+python -m pytest -m audio_real
 ```
 
 Los audios reales de validación se guardan fuera de Git. Para la validación local opcional, graba un audio propio y colócalo en `backend/tests/fixtures/private_audio/`; si la carpeta está vacía, el test se salta con un aviso claro. También hay un test opcional `server_e2e` que arranca `scripts/run-backend-e2e.ps1` contra la base de test y valida STM/Journal por HTTP. Consulta `docs/TESTING.md` para preparar la base de test, ejecutar marcadores y documentar KPIs.

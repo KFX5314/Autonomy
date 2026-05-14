@@ -44,11 +44,12 @@ Ejecutar la suite normal:
 python -m pytest
 ```
 
+La cache interna de pytest esta desactivada para evitar errores de permisos en Windows. Los tests que necesitan archivos temporales persistentes usan `backend/.pytest_runtime/`, ignorado por Git.
+
 Si el equipo no tiene GPU dedicada activa, o CUDA no esta disponible, fuerza Whisper en CPU antes de ejecutar tests con audio real:
 
 ```powershell
 $env:STT_DEVICE="cpu"
-python -m pytest
 ```
 
 Ejecutar solo tests de integracion:

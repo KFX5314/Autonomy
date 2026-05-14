@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *.pyo
+backend/.pytest_runtime/
 
 # Virtual env
 venv/

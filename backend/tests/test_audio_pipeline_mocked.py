@@ -1,4 +1,6 @@
+from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
@@ -36,7 +38,6 @@ def test_audio_chunk_creates_alert_with_mocked_models(
     client,
     db_session,
     monkeypatch,
-    tmp_path,
     register_caregiver,
     register_patient,
 ):
@@ -44,7 +45,9 @@ def test_audio_chunk_creates_alert_with_mocked_models(
     patient = register_patient(client, username="audio_patient")
     _enroll_test_voice_sample(db_session, "audio_patient")
 
-    monkeypatch.setattr(audio_route.config, "ALERTS_AUDIO_DIR", str(tmp_path))
+    alert_audio_dir = Path(".pytest_runtime") / "alert_audio" / uuid4().hex
+    alert_audio_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(audio_route.config, "ALERTS_AUDIO_DIR", str(alert_audio_dir))
     monkeypatch.setattr(audio_route, "should_schedule_journal", lambda *args, **kwargs: False)
     monkeypatch.setattr(audio_route, "enforce_patient_audio_cap", lambda db, patient_id: None)
     monkeypatch.setattr(
