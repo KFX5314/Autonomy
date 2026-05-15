@@ -142,6 +142,7 @@ class Config:
     SPEAKER_DEVICE: str = field(default_factory=lambda: os.getenv("SPEAKER_DEVICE", "cpu"))
     SPEAKER_DIARIZATION_THRESHOLD: float = field(default_factory=lambda: float(os.getenv("SPEAKER_DIARIZATION_THRESHOLD", "0.40")))
     SPEAKER_UNCERTAIN_THRESHOLD: float = field(default_factory=lambda: float(os.getenv("SPEAKER_UNCERTAIN_THRESHOLD", "0.30")))
+    SPEAKER_SAMPLE_CONSISTENCY_THRESHOLD: float = field(default_factory=lambda: float(os.getenv("SPEAKER_SAMPLE_CONSISTENCY_THRESHOLD", "0.40")))
 
     # Assistant TTS echo recognition. The patient app sends the most recent TTS
     # text as a hint; the backend still requires a strong transcript match.

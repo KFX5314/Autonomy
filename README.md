@@ -374,6 +374,7 @@ TFG-DEMENCIA/
 | `SPEAKER_DEVICE` | `cpu` | Dispositivo para SpeechBrain |
 | `SPEAKER_DIARIZATION_THRESHOLD` | `0.40` | Umbral de similitud para etiquetar `[PACIENTE]` |
 | `SPEAKER_UNCERTAIN_THRESHOLD` | `0.30` | Umbral inferior para etiquetar `[PACIENTE?]` |
+| `SPEAKER_SAMPLE_CONSISTENCY_THRESHOLD` | `0.40` | Umbral para aceptar una nueva muestra de voz como activa |
 | `TTS_ECHO_MATCH_WINDOW_MS` | `30000` | Ventana para reconocer eco TTS reciente |
 | `TTS_ECHO_MATCH_RATIO` | `0.82` | Similitud mínima para etiquetar `[ASSISTANT]` |
 | `TTS_ECHO_MIN_CHARS` | `12` | Longitud mínima para comparar eco TTS |
@@ -492,8 +493,9 @@ En autenticación, el responsable se registra e inicia sesión con email. El pac
 
 ### ¿Por qué SpeechBrain para diarización?
 
-- La muestra de voz permite crear un embedding local del paciente.
-- Cada segmento se compara contra ese embedding para etiquetar `[PACIENTE]`, `[PACIENTE?]` u `[OTRO]`; si coincide con una respuesta TTS reciente de la app, se etiqueta `[ASSISTANT]`.
+- Las muestras de voz permiten crear embeddings locales del paciente.
+- Cada segmento se compara contra la muestra activa con mayor similitud para etiquetar `[PACIENTE]`, `[PACIENTE?]` u `[OTRO]`; si coincide con una respuesta TTS reciente de la app, se etiqueta `[ASSISTANT]`.
+- Las muestras nuevas solo quedan activas si son consistentes con las muestras ya aceptadas; si no, quedan en revision para que el cuidador las borre o regrabe.
 - `[PACIENTE?]` indica identificación dudosa: no dispara reglas deterministas, pero el LLM la recibe como contexto con cautela.
 - Las reglas se aplican sobre texto `[PACIENTE]` cuando hay diarización disponible, reduciendo falsas alertas por frases dichas por otra persona.
 

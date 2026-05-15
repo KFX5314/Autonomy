@@ -377,23 +377,38 @@ export default function PatientContextScreen({ patient, onBack }) {
           {voiceSamples.length ? (
             voiceSamples.map((sample, index) => (
               <View key={sample.id} style={styles.voiceSampleRow}>
-                <View>
+                <View style={styles.voiceSampleInfo}>
                   <Text style={styles.voiceSampleTitle}>Muestra {index + 1}</Text>
                   <Text style={styles.voiceSampleMeta}>
                     {sample.created_at ? new Date(sample.created_at).toLocaleString("es-ES") : "Muestra antigua"}
                   </Text>
+                  {sample.consistency_similarity != null ? (
+                    <Text style={styles.voiceSampleMeta}>
+                      Consistencia {Math.round(sample.consistency_similarity * 100)}%
+                    </Text>
+                  ) : null}
                 </View>
-                <Pressable
-                  style={styles.voiceDeleteBtn}
-                  onPress={() =>
+                <View style={styles.voiceSampleActions}>
+                  <Text
+                    style={[
+                      styles.voiceSampleStatus,
+                      sample.active ? styles.voiceSampleStatusActive : styles.voiceSampleStatusReview,
+                    ]}
+                  >
+                    {sample.active ? "Activa" : "Revisar"}
+                  </Text>
+                  <Pressable
+                    style={styles.voiceDeleteBtn}
+                    onPress={() =>
                     Alert.alert("Borrar muestra", "¿Quieres eliminar esta muestra de voz?", [
                       { text: "Cancelar", style: "cancel" },
                       { text: "Borrar", style: "destructive", onPress: () => handleDeleteVoiceSample(sample.id) },
                     ])
                   }
-                >
-                  <Text style={styles.voiceDeleteText}>Borrar</Text>
-                </Pressable>
+                  >
+                    <Text style={styles.voiceDeleteText}>Borrar</Text>
+                  </Pressable>
+                </View>
               </View>
             ))
           ) : (
@@ -544,8 +559,20 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#F1F1F1",
   },
+  voiceSampleInfo: { flex: 1, paddingRight: 10 },
   voiceSampleTitle: { fontSize: 14, fontWeight: "700", color: "#333" },
   voiceSampleMeta: { fontSize: 12, color: "#777", marginTop: 2 },
+  voiceSampleActions: { alignItems: "flex-end", gap: 6 },
+  voiceSampleStatus: {
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    fontSize: 11,
+    fontWeight: "700",
+    overflow: "hidden",
+  },
+  voiceSampleStatusActive: { backgroundColor: "#EAF7EF", color: "#1E7B45" },
+  voiceSampleStatusReview: { backgroundColor: "#FFF4E5", color: "#9A5B00" },
   voiceDeleteBtn: {
     borderRadius: 8,
     backgroundColor: "#FDECEC",

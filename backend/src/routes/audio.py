@@ -78,7 +78,15 @@ def _response_segments(segments: list[dict]) -> list[dict]:
     out: list[dict] = []
     for s in segments:
         item = {"start": s["start"], "end": s["end"]}
-        for key in ("speaker", "speaker_similarity", "speaker_threshold", "speaker_uncertain_threshold", "speaker_confidence"):
+        for key in (
+            "speaker",
+            "speaker_similarity",
+            "speaker_threshold",
+            "speaker_uncertain_threshold",
+            "speaker_confidence",
+            "speaker_sample_id",
+            "speaker_reference_strategy",
+        ):
             if key in s:
                 item[key] = s[key]
         out.append(item)

@@ -31,7 +31,11 @@ MAX_VOICE_SAMPLES = 10
 # Similarity thresholds for patient and possible-patient labels.
 DIARIZATION_THRESHOLD = config.SPEAKER_DIARIZATION_THRESHOLD
 UNCERTAIN_THRESHOLD = config.SPEAKER_UNCERTAIN_THRESHOLD
+SAMPLE_CONSISTENCY_THRESHOLD = config.SPEAKER_SAMPLE_CONSISTENCY_THRESHOLD
 LOW_CONFIDENCE_MARGIN = 0.08
+VOICE_SAMPLE_STATUS_ACTIVE = "active"
+VOICE_SAMPLE_STATUS_REVIEW = "review"
+VOICE_REFERENCE_STRATEGY = "best_active_sample"
 
 # Model cache directory (kept out of site-packages so we can wipe/reset it).
 _MODEL_DIR = os.path.join(
@@ -192,14 +196,107 @@ def create_embedding(audio_path: str) -> list[float]:
     return embedding.tolist()
 
 
-def _is_valid_embedding(embedding: object) -> bool:
-    if not isinstance(embedding, list) or len(embedding) != EMBEDDING_DIM:
-        return False
+def _embedding_array(embedding: object) -> np.ndarray | None:
     try:
-        np.array(embedding, dtype=np.float32)
+        arr = np.asarray(embedding, dtype=np.float32).reshape(-1)
     except (TypeError, ValueError):
+        return None
+    if arr.shape[0] != EMBEDDING_DIM or not np.all(np.isfinite(arr)):
+        return None
+    return arr
+
+
+def _is_valid_embedding(embedding: object) -> bool:
+    if not isinstance(embedding, list):
         return False
-    return True
+    return _embedding_array(embedding) is not None
+
+
+def _normalize_embedding(embedding: object) -> np.ndarray | None:
+    arr = _embedding_array(embedding)
+    if arr is None:
+        return None
+    norm = np.linalg.norm(arr)
+    if norm <= 0:
+        return None
+    return (arr / norm).astype(np.float32)
+
+
+def _voice_sample_sort_key(index_and_sample: tuple[int, dict]) -> tuple[bool, str, int]:
+    index, sample = index_and_sample
+    created_at = sample.get("created_at")
+    return (created_at is not None, str(created_at or ""), index)
+
+
+def _sort_voice_samples(samples: list[dict]) -> list[dict]:
+    return [
+        sample
+        for _, sample in sorted(enumerate(samples), key=_voice_sample_sort_key)
+    ]
+
+
+def _has_voice_sample_state(sample: dict) -> bool:
+    active = sample.get("active")
+    status = sample.get("status")
+    return (
+        isinstance(active, bool)
+        and status in {VOICE_SAMPLE_STATUS_ACTIVE, VOICE_SAMPLE_STATUS_REVIEW}
+        and (
+            (active and status == VOICE_SAMPLE_STATUS_ACTIVE)
+            or (not active and status == VOICE_SAMPLE_STATUS_REVIEW)
+        )
+        and "consistency_similarity" in sample
+        and "reference_sample_id" in sample
+    )
+
+
+def _recalculate_voice_sample_states(
+    samples: list[dict],
+    consistency_threshold: float = SAMPLE_CONSISTENCY_THRESHOLD,
+) -> list[dict]:
+    """Mark samples active only when they agree with already accepted samples."""
+    recalculated: list[dict] = []
+    active_vectors: list[tuple[dict, np.ndarray]] = []
+
+    for sample in _sort_voice_samples(samples):
+        next_sample = dict(sample)
+        next_sample["active"] = False
+        next_sample["status"] = VOICE_SAMPLE_STATUS_REVIEW
+        next_sample["consistency_similarity"] = None
+        next_sample["reference_sample_id"] = None
+
+        emb = _normalize_embedding(next_sample.get("embedding"))
+        if emb is None:
+            recalculated.append(next_sample)
+            continue
+
+        if not active_vectors:
+            next_sample["active"] = True
+            next_sample["status"] = VOICE_SAMPLE_STATUS_ACTIVE
+            active_vectors.append((next_sample, emb))
+            recalculated.append(next_sample)
+            continue
+
+        best_sample: dict | None = None
+        best_similarity = -1.0
+        for active_sample, active_emb in active_vectors:
+            similarity = float(np.dot(emb, active_emb))
+            if similarity > best_similarity:
+                best_similarity = similarity
+                best_sample = active_sample
+
+        next_sample["consistency_similarity"] = best_similarity
+        if best_sample is not None:
+            next_sample["reference_sample_id"] = str(best_sample.get("id") or "legacy")
+
+        if best_similarity >= consistency_threshold:
+            next_sample["active"] = True
+            next_sample["status"] = VOICE_SAMPLE_STATUS_ACTIVE
+            active_vectors.append((next_sample, emb))
+
+        recalculated.append(next_sample)
+
+    return recalculated
 
 
 def _voice_samples_from_store(voice_embedding: object) -> list[dict]:
@@ -209,15 +306,27 @@ def _voice_samples_from_store(voice_embedding: object) -> list[dict]:
             "id": "legacy",
             "created_at": None,
             "embedding": voice_embedding,
+            "active": True,
+            "status": VOICE_SAMPLE_STATUS_ACTIVE,
+            "consistency_similarity": None,
+            "reference_sample_id": None,
         }]
 
     if isinstance(voice_embedding, dict):
         samples = voice_embedding.get("samples", [])
         if isinstance(samples, list):
-            return [
-                s for s in samples
-                if isinstance(s, dict) and _is_valid_embedding(s.get("embedding"))
-            ]
+            valid_samples = []
+            for index, sample in enumerate(samples):
+                if not isinstance(sample, dict) or not _is_valid_embedding(sample.get("embedding")):
+                    continue
+                normalized = dict(sample)
+                normalized["id"] = str(normalized.get("id") or f"sample-{index + 1}")
+                normalized["created_at"] = normalized.get("created_at")
+                valid_samples.append(normalized)
+            valid_samples = _sort_voice_samples(valid_samples)[-MAX_VOICE_SAMPLES:]
+            if any(not _has_voice_sample_state(sample) for sample in valid_samples):
+                return _recalculate_voice_sample_states(valid_samples)
+            return valid_samples
     return []
 
 
@@ -228,6 +337,10 @@ def list_voice_samples(voice_embedding: object) -> list[dict]:
             "id": str(sample.get("id") or "legacy"),
             "created_at": sample.get("created_at"),
             "embedding_size": len(sample.get("embedding") or []),
+            "active": bool(sample.get("active")),
+            "status": sample.get("status") or VOICE_SAMPLE_STATUS_REVIEW,
+            "consistency_similarity": sample.get("consistency_similarity"),
+            "reference_sample_id": sample.get("reference_sample_id"),
         }
         for sample in _voice_samples_from_store(voice_embedding)
     ]
@@ -241,8 +354,8 @@ def append_voice_sample(voice_embedding: object, embedding: list[float]) -> dict
         "created_at": datetime.now(timezone.utc).isoformat(),
         "embedding": embedding,
     })
-    samples = samples[-MAX_VOICE_SAMPLES:]
-    return {"samples": samples}
+    samples = _sort_voice_samples(samples)[-MAX_VOICE_SAMPLES:]
+    return {"samples": _recalculate_voice_sample_states(samples)}
 
 
 def delete_voice_sample(voice_embedding: object, sample_id: str) -> dict | None:
@@ -252,22 +365,19 @@ def delete_voice_sample(voice_embedding: object, sample_id: str) -> dict | None:
     ]
     if not samples:
         return None
-    return {"samples": samples[-MAX_VOICE_SAMPLES:]}
+    samples = _sort_voice_samples(samples)[-MAX_VOICE_SAMPLES:]
+    return {"samples": _recalculate_voice_sample_states(samples)}
 
 
-def _average_patient_embedding(voice_embedding: object) -> np.ndarray | None:
-    """
-    Resolve single-vector or multi-sample storage to one normalized patient vector.
-
-    Embeddings are already normalized when created. We normalize again before
-    averaging so imported/manual records cannot skew the centroid by magnitude.
-    """
-    vectors = []
+def _active_voice_sample_vectors(voice_embedding: object) -> list[tuple[dict, np.ndarray]]:
+    """Return active sample records paired with normalized embeddings."""
+    vectors: list[tuple[dict, np.ndarray]] = []
     for sample in _voice_samples_from_store(voice_embedding):
-        emb = np.array(sample["embedding"], dtype=np.float32)
-        norm = np.linalg.norm(emb)
-        if norm > 0:
-            vectors.append(emb / norm)
+        if sample.get("active") is not True or sample.get("status") != VOICE_SAMPLE_STATUS_ACTIVE:
+            continue
+        emb = _normalize_embedding(sample.get("embedding"))
+        if emb is not None:
+            vectors.append((sample, emb))
 
     if not vectors:
         if isinstance(voice_embedding, list):
@@ -276,18 +386,33 @@ def _average_patient_embedding(voice_embedding: object) -> np.ndarray | None:
                 f"current encoder expects {EMBEDDING_DIM}. The patient must re-record "
                 "their voice sample."
             )
+    return vectors
+
+
+def _best_active_sample_match(
+    candidate_embedding: object,
+    sample_vectors: list[tuple[dict, np.ndarray]],
+) -> dict | None:
+    candidate = _normalize_embedding(candidate_embedding)
+    if candidate is None or not sample_vectors:
         return None
 
-    centroid = np.mean(vectors, axis=0)
-    norm = np.linalg.norm(centroid)
-    if norm > 0:
-        centroid = centroid / norm
-    return centroid.astype(np.float32)
+    best_sample: dict | None = None
+    best_similarity = -1.0
+    for sample, sample_emb in sample_vectors:
+        similarity = float(np.dot(candidate, sample_emb))
+        if similarity > best_similarity:
+            best_similarity = similarity
+            best_sample = sample
+
+    if best_sample is None:
+        return None
+    return {"sample": best_sample, "similarity": best_similarity}
 
 
 def _check_embedding_version(patient_embedding: object) -> bool:
     """Validate that at least one stored embedding matches the current encoder."""
-    if _average_patient_embedding(patient_embedding) is None:
+    if not _active_voice_sample_vectors(patient_embedding):
         logger.warning(
             "No valid ECAPA-TDNN voice samples available for speaker verification."
         )
@@ -304,8 +429,8 @@ def identify_speaker(
     Compare an entire audio chunk against the stored patient embedding.
     Returns True if the speaker is likely the patient.
     """
-    patient_emb = _average_patient_embedding(patient_embedding)
-    if patient_emb is None:
+    sample_vectors = _active_voice_sample_vectors(patient_embedding)
+    if not sample_vectors:
         return False
 
     wav = _load_wav(audio_path)
@@ -313,7 +438,12 @@ def identify_speaker(
         return False
 
     chunk_embedding = _embed(wav)
-    similarity = float(np.dot(chunk_embedding, patient_emb))
+    match_info = _best_active_sample_match(chunk_embedding, sample_vectors)
+    if match_info is None:
+        return False
+    similarity = float(match_info["similarity"])
+    sample = match_info["sample"]
+    sample_id = str(sample.get("id") or "legacy")
 
     match = similarity >= threshold
     clamped = max(0.0, min(1.0, similarity))
@@ -324,7 +454,10 @@ def identify_speaker(
     bar = _similarity_bar(similarity)
     confidence = _speaker_confidence(similarity, threshold)
     print(f"\n{color}  [SPK] SPEAKER ID: {label}{rst}")
-    print(f"     Similitud: {bar} {similarity:.3f}  (umbral {threshold}, confianza {confidence})")
+    print(
+        f"     Similitud: {bar} {similarity:.3f}  "
+        f"(umbral {threshold}, confianza {confidence}, muestra {sample_id})"
+    )
 
     return match
 
@@ -371,12 +504,14 @@ def diarize_segments(
     Very short segments are expanded with neighboring Whisper segments before
     embedding; if they are still too short, they inherit the previous speaker.
     """
-    patient_emb = _average_patient_embedding(patient_embedding)
-    if patient_emb is None:
+    sample_vectors = _active_voice_sample_vectors(patient_embedding)
+    if not sample_vectors:
         for seg in segments:
             seg["speaker"] = "OTRO"
             seg["speaker_similarity"] = None
             seg["speaker_confidence"] = "unavailable"
+            seg["speaker_sample_id"] = None
+            seg["speaker_reference_strategy"] = VOICE_REFERENCE_STRATEGY
         return segments
 
     wav = _load_wav(audio_path)
@@ -390,17 +525,28 @@ def diarize_segments(
             seg["speaker"] = last_speaker or "PACIENTE?"
             seg["speaker_similarity"] = None
             seg["speaker_confidence"] = "inherited" if last_speaker else "uncertain"
+            seg["speaker_sample_id"] = None
+            seg["speaker_reference_strategy"] = VOICE_REFERENCE_STRATEGY
             sim_str = "---"
             tag_reason = "corto"
         else:
             seg_embedding = _embed(seg_wav)
-            similarity = float(np.dot(seg_embedding, patient_emb))
+            match_info = _best_active_sample_match(seg_embedding, sample_vectors)
+            if match_info is None:
+                similarity = -1.0
+                sample_id = None
+            else:
+                similarity = float(match_info["similarity"])
+                sample = match_info["sample"]
+                sample_id = str(sample.get("id") or "legacy")
             speaker, confidence = _speaker_label(similarity, threshold, uncertain_threshold)
             seg["speaker"] = speaker
             seg["speaker_similarity"] = similarity
             seg["speaker_threshold"] = threshold
             seg["speaker_uncertain_threshold"] = uncertain_threshold
             seg["speaker_confidence"] = confidence
+            seg["speaker_sample_id"] = sample_id
+            seg["speaker_reference_strategy"] = VOICE_REFERENCE_STRATEGY
             clamped = max(0.0, min(1.0, similarity))
             bar = "█" * int(clamped * 20) + "░" * (20 - int(clamped * 20))
             bar = _similarity_bar(similarity)
