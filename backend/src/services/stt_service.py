@@ -13,6 +13,9 @@ import time
 import tempfile
 import os
 from collections import Counter
+from difflib import SequenceMatcher
+import re
+import unicodedata
 
 from faster_whisper import WhisperModel
 
@@ -92,6 +95,62 @@ _HALLUCINATION_PHRASES = [
     "amara.org",
 ]
 
+# Whole-output boilerplate observed when Whisper copies the initial prompt on
+# noisy or distant speech. These are intentionally matched against the complete
+# normalized transcript, not as broad substrings, to avoid dropping real speech.
+_PROMPT_ECHO_BOILERPLATE = [
+    "conversacion en espanol entre una persona mayor y su cuidador",
+    "conversacion entre una persona mayor y su cuidador",
+    "conversacion en espanol",
+]
+
+
+def _normalize_for_hallucination_check(text: str) -> str:
+    text = unicodedata.normalize("NFD", (text or "").lower())
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
+    text = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _is_near_complete_prompt_echo(text_norm: str, prompt_norm: str) -> bool:
+    """Return True only when the whole transcript is essentially the prompt.
+
+    We require both high sequence similarity and comparable length. This avoids
+    filtering real patient speech that merely contains words like "conversacion
+    en espanol" as part of a longer sentence.
+    """
+    if not text_norm or not prompt_norm:
+        return False
+
+    shorter = min(len(text_norm), len(prompt_norm))
+    longer = max(len(text_norm), len(prompt_norm))
+    if shorter < 12 or longer == 0:
+        return False
+
+    length_ratio = shorter / longer
+    if length_ratio < 0.72:
+        return False
+
+    if text_norm == prompt_norm:
+        return True
+
+    ratio = SequenceMatcher(None, text_norm, prompt_norm).ratio()
+    return ratio >= 0.90
+
+
+def _is_prompt_echo(full_text: str) -> bool:
+    text_norm = _normalize_for_hallucination_check(full_text)
+    if not text_norm:
+        return False
+
+    prompt_norm = _normalize_for_hallucination_check(config.STT_INITIAL_PROMPT)
+    candidates = [p for p in (prompt_norm, *(_PROMPT_ECHO_BOILERPLATE)) if p]
+    for candidate in candidates:
+        if _is_near_complete_prompt_echo(text_norm, candidate):
+            logger.warning(f"Hallucination detected (prompt echo): '{full_text[:120]}'")
+            return True
+    return False
+
 
 def _is_hallucination(segments: list, audio_duration: float | None = None) -> bool:
     """Detect residual hallucination patterns that slipped past the VAD filter."""
@@ -100,6 +159,9 @@ def _is_hallucination(segments: list, audio_duration: float | None = None) -> bo
 
     texts = [s["text"].strip().lower() for s in segments if s["text"].strip()]
     full_text = " ".join(texts).lower()
+
+    if _is_prompt_echo(full_text):
+        return True
 
     for phrase in _HALLUCINATION_PHRASES:
         if phrase in full_text:

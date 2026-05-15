@@ -133,7 +133,7 @@ class Config:
     STT_MIN_SILENCE_MS: int = field(default_factory=lambda: int(os.getenv("STT_MIN_SILENCE_MS", "300")))
     STT_INITIAL_PROMPT: str = field(default_factory=lambda: os.getenv(
         "STT_INITIAL_PROMPT",
-        "Conversación en español entre una persona mayor y su cuidador.",
+        "",
     ))
 
     # Speaker diarization (SpeechBrain ECAPA-TDNN).

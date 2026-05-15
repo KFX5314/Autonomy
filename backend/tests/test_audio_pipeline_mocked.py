@@ -119,3 +119,70 @@ def test_audio_chunk_rejects_invalid_mime(client, register_caregiver, register_p
     )
 
     assert response.status_code == 415
+
+
+def test_audio_chunk_with_only_other_speaker_skips_detector_and_llm(
+    client,
+    db_session,
+    monkeypatch,
+    register_caregiver,
+    register_patient,
+):
+    register_caregiver(client)
+    patient = register_patient(client, username="other_only_patient")
+    _enroll_test_voice_sample(db_session, "other_only_patient")
+
+    monkeypatch.setattr(
+        audio_route.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="10.0"),
+    )
+    monkeypatch.setattr(
+        audio_route,
+        "transcribe_audio",
+        lambda path, audio_duration=None: {
+            "text": "Conversación lejana de otra persona",
+            "language": "es",
+            "segments": [{"start": 0.0, "end": 9.0, "text": "Conversación lejana de otra persona"}],
+        },
+    )
+
+    def fake_diarize(audio_path, segments, patient_embedding):
+        segments[0].update({
+            "speaker": "OTRO",
+            "speaker_similarity": 0.03,
+            "speaker_threshold": 0.40,
+            "speaker_uncertain_threshold": 0.30,
+            "speaker_confidence": "high",
+        })
+        return segments
+
+    class FailingDetector:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("EpisodeDetector should not run for OTRO-only audio")
+
+    monkeypatch.setattr(audio_route, "diarize_segments", fake_diarize)
+    monkeypatch.setattr(
+        audio_route,
+        "build_tagged_transcript",
+        lambda segments: "[OTRO] Conversación lejana de otra persona",
+    )
+    monkeypatch.setattr(audio_route, "EpisodeDetector", FailingDetector)
+
+    response = client.post(
+        "/audio/chunk",
+        headers=auth_headers(patient["access_token"]),
+        files={"file": ("chunk.wav", b"fake audio", "audio/wav")},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["episode"] is False
+    assert body["severity"] == 0
+    assert body["mode"] == "idle"
+    assert body["reason"] == "Sin voz del paciente"
+    assert body["transcript"] == "[OTRO] Conversación lejana de otra persona"
+    assert body["segments"][0]["speaker"] == "OTRO"
+
+    assert db_session.query(Transcript).count() == 1
+    assert db_session.query(Alert).count() == 0

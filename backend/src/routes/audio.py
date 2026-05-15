@@ -192,6 +192,8 @@ async def process_audio_chunk(
                 # Recognize leaked app TTS before speaker verification so it
                 # cannot trigger alerts.
                 is_assistant_echo = False
+                speaker_verified = False
+                has_patient_like_speaker = False
                 t_diar_start = time.time()
                 echo_match = detect_tts_echo(transcript_text, recent_tts_text, recent_tts_age_ms)
                 if echo_match:
@@ -207,8 +209,13 @@ async def process_audio_chunk(
                     print(f"\033[96m  [TAG] TRANSCRIPCION ETIQUETADA:\033[0m")
                     print(f"     {transcript_text}")
                 elif patient.voice_embedding and segments:
+                    speaker_verified = True
                     segments = diarize_segments(
                         tmp_path, segments, patient.voice_embedding
+                    )
+                    has_patient_like_speaker = any(
+                        seg.get("speaker") in {"PACIENTE", "PACIENTE?"}
+                        for seg in segments
                     )
                     transcript_text = build_tagged_transcript(segments)
                     print(f"\033[96m  [TAG] TRANSCRIPCION ETIQUETADA:\033[0m")
@@ -252,6 +259,22 @@ async def process_audio_chunk(
                         episode=False,
                         severity=0,
                         reason="Eco TTS del asistente",
+                        reply_text=None,
+                        alert_id=None,
+                        mode="idle",
+                        segments=_response_segments(segments),
+                    )
+
+                if speaker_verified and not has_patient_like_speaker:
+                    db.commit()
+                    print("\033[92m  [OK] SOLO OTRO: sin voz del paciente, sin LLM\033[0m")
+                    print(f"\033[96m  >> TOTAL:          {time.time() - t0:.2f}s\033[0m")
+                    print(f"\033[96m{'='*60}\033[0m\n")
+                    return AudioChunkResponse(
+                        transcript=transcript_text,
+                        episode=False,
+                        severity=0,
+                        reason="Sin voz del paciente",
                         reply_text=None,
                         alert_id=None,
                         mode="idle",
