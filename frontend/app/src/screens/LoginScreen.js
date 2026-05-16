@@ -40,24 +40,20 @@ export default function LoginScreen({ onLogin }) {
   const [isRegister, setIsRegister] = useState(false);
   const [identifier, setIdentifier] = useState("");
   const [email, setEmail] = useState("");
-  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [role, setRole] = useState("caregiver"); // "caregiver" | "patient"
-  const [caregiverEmail, setCaregiverEmail] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const isPatient = role === "patient";
+  const isPatient = !isRegister && role === "patient";
 
   const handleSubmit = async () => {
     const cleanFullName = fullName.trim();
     const cleanEmail = email.trim();
-    const cleanUsername = username.trim();
-    const cleanCaregiverEmail = caregiverEmail.trim();
     const cleanIdentifier = identifier.trim();
 
     if (!password) {
-      Alert.alert("Error", "La contraseña es obligatoria");
+      Alert.alert("Error", "La contrasena es obligatoria");
       return;
     }
 
@@ -71,16 +67,8 @@ export default function LoginScreen({ onLogin }) {
         Alert.alert("Error", "El nombre es obligatorio");
         return;
       }
-      if (isPatient && !cleanUsername) {
-        Alert.alert("Error", "El usuario del paciente es obligatorio");
-        return;
-      }
-      if (!isPatient && !cleanEmail) {
+      if (!cleanEmail) {
         Alert.alert("Error", "El email del responsable es obligatorio");
-        return;
-      }
-      if (isPatient && !cleanCaregiverEmail) {
-        Alert.alert("Error", "Debes indicar el email del responsable");
         return;
       }
     }
@@ -90,12 +78,12 @@ export default function LoginScreen({ onLogin }) {
       let data;
       if (isRegister) {
         data = await register({
-          email: isPatient ? null : cleanEmail,
-          username: isPatient ? cleanUsername : null,
+          email: cleanEmail,
+          username: null,
           password,
           fullName: cleanFullName,
-          role,
-          caregiverEmail: isPatient ? cleanCaregiverEmail : null,
+          role: "caregiver",
+          caregiverEmail: null,
         });
       } else {
         data = await login(cleanIdentifier, password, role);
@@ -111,6 +99,13 @@ export default function LoginScreen({ onLogin }) {
   };
 
   const loginPlaceholder = isPatient ? "Usuario del paciente" : "Email del responsable";
+  const toggleRegister = () => {
+    setIsRegister((current) => {
+      const next = !current;
+      if (next) setRole("caregiver");
+      return next;
+    });
+  };
 
   return (
     <KeyboardAvoidingView
@@ -120,10 +115,10 @@ export default function LoginScreen({ onLogin }) {
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
         <Text style={styles.title}>Asistente</Text>
         <Text style={styles.subtitle}>
-          {isRegister ? "Crear cuenta" : "Iniciar sesión"}
+          {isRegister ? "Crear cuenta de responsable" : "Iniciar sesion"}
         </Text>
 
-        <RoleSelector role={role} onChange={setRole} />
+        {!isRegister ? <RoleSelector role={role} onChange={setRole} /> : null}
 
         {isRegister ? (
           <>
@@ -133,35 +128,14 @@ export default function LoginScreen({ onLogin }) {
               value={fullName}
               onChangeText={setFullName}
             />
-
-            {isPatient ? (
-              <>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Usuario del paciente"
-                  value={username}
-                  onChangeText={setUsername}
-                  autoCapitalize="none"
-                />
-                <TextInput
-                  style={styles.input}
-                  placeholder="Email del responsable"
-                  value={caregiverEmail}
-                  onChangeText={setCaregiverEmail}
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                />
-              </>
-            ) : (
-              <TextInput
-                style={styles.input}
-                placeholder="Email del responsable"
-                value={email}
-                onChangeText={setEmail}
-                keyboardType="email-address"
-                autoCapitalize="none"
-              />
-            )}
+            <TextInput
+              style={styles.input}
+              placeholder="Email del responsable"
+              value={email}
+              onChangeText={setEmail}
+              keyboardType="email-address"
+              autoCapitalize="none"
+            />
           </>
         ) : (
           <TextInput
@@ -176,7 +150,7 @@ export default function LoginScreen({ onLogin }) {
 
         <TextInput
           style={styles.input}
-          placeholder="Contraseña"
+          placeholder="Contrasena"
           value={password}
           onChangeText={setPassword}
           secureTextEntry
@@ -192,9 +166,9 @@ export default function LoginScreen({ onLogin }) {
           </Text>
         </Pressable>
 
-        <Pressable onPress={() => setIsRegister(!isRegister)}>
+        <Pressable onPress={toggleRegister}>
           <Text style={styles.link}>
-            {isRegister ? "¿Ya tienes cuenta? Inicia sesión" : "¿No tienes cuenta? Regístrate"}
+            {isRegister ? "Ya tienes cuenta? Inicia sesion" : "No tienes cuenta de responsable? Registrate"}
           </Text>
         </Pressable>
       </ScrollView>

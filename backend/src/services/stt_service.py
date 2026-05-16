@@ -7,15 +7,39 @@ hallucinations on silence (no more "Gracias por ver el vídeo" etc.).
 A small phrase/timestamp/repetition filter catches residual hallucinations.
 """
 
+import os
 import logging
+import sysconfig
 import threading
 import time
 import tempfile
-import os
 from collections import Counter
 from difflib import SequenceMatcher
 import re
 import unicodedata
+
+
+def _add_nvidia_dll_dirs() -> None:
+    if os.name != "nt" or not hasattr(os, "add_dll_directory"):
+        return
+
+    site_packages = sysconfig.get_paths().get("purelib")
+    if not site_packages:
+        return
+
+    for subdir in (
+        "nvidia/cublas/bin",
+        "nvidia/cudnn/bin",
+        "nvidia/cuda_nvrtc/bin",
+        "nvidia/cuda_runtime/bin",
+    ):
+        dll_dir = os.path.join(site_packages, *subdir.split("/"))
+        if os.path.isdir(dll_dir):
+            os.add_dll_directory(dll_dir)
+            os.environ["PATH"] = dll_dir + os.pathsep + os.environ.get("PATH", "")
+
+
+_add_nvidia_dll_dirs()
 
 from faster_whisper import WhisperModel
 

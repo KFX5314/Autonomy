@@ -15,6 +15,12 @@ class PatientOut(BaseModel):
         from_attributes = True
 
 
+class PatientCreate(BaseModel):
+    full_name: str
+    username: str | None = None
+    password: str
+
+
 class PatientContextUpdate(BaseModel):
     context_json: dict
 

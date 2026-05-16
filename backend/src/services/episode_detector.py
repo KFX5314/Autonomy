@@ -3,8 +3,9 @@ Episode detection engine.
 
 Two-stage pipeline:
   1. Rule-based matching (fast, deterministic) — trigger phrases and regex
-     patterns. Runs ONLY over [PACIENTE]-tagged text when diarization is
-     available, so caregivers or uncertain speakers don't fire the alert.
+     patterns. Runs over [PACIENTE] and [PACIENTE?]-tagged text when
+     diarization is available, so likely patient emergency phrases still fire
+     the alert while [OTRO] and [ASISTENTE] remain ignored.
   2. LLM-based analysis — contextual reasoning. A single call produces the
      classification AND (when it's an episode) the calming spoken reply,
      avoiding a second round-trip.
@@ -63,6 +64,18 @@ def _extract_possible_patient_text(transcript: str) -> str:
         if text.strip():
             fragments.append(f"[{prefix}] {text.strip()}")
     return "\n".join(fragments).strip()
+
+
+def _extract_rule_patient_text(transcript: str) -> str:
+    if not transcript:
+        return ""
+    if not _has_speaker_tags(transcript):
+        return transcript
+    return " ".join(
+        text.strip()
+        for _, text in _POSSIBLE_PATIENT_LINE.findall(transcript)
+        if text.strip()
+    ).strip()
 
 
 def _build_reply_system_prompt(context: dict, severity: int = 3) -> str:
@@ -215,7 +228,7 @@ def _build_analysis_prompt(context: dict, transcript: str, short_term_memory: st
         f"puede ser evidencia contextual, especialmente si el contenido es grave, pero debes ser más prudente.\n"
         f"- [OTRO] puede dar contexto, pero nunca activa episodio por si solo.\n"
         f"- [ASISTENTE] es la respuesta hablada anterior del sistema; nunca activa episodio por si sola.\n"
-        f"- Las frases/regex deterministas ya se comprobaron sólo con [PACIENTE], nunca con [PACIENTE?].\n"
+        f"- Las frases/regex deterministas ya se comprobaron con [PACIENTE] y [PACIENTE?], nunca con [OTRO] ni [ASISTENTE].\n"
         f"- La memoria reciente sólo aclara referencias; no es el audio actual.\n"
         f"- No inventes datos que no estén en el perfil, la memoria o la transcripción.\n\n"
         f"Usa primero los criterios personalizados de vigilancia del responsable si existen. "
@@ -371,8 +384,8 @@ class EpisodeDetector:
         short_term_memory: str = "",
         use_llm: bool = True,
     ) -> EpisodeResult:
-        patient_text = _extract_patient_text(transcript)
-        rule_result = self._rule_based_check(patient_text)
+        rule_text = _extract_rule_patient_text(transcript)
+        rule_result = self._rule_based_check(rule_text)
 
         if rule_result is not None:
             if use_llm:

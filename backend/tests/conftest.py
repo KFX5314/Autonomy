@@ -158,15 +158,24 @@ def register_patient():
         caregiver_email: str = "care@example.com",
         password: str = "secret123",
     ):
-        response = client.post(
-            "/auth/register",
+        caregiver_login = client.post(
+            "/auth/login",
+            json={"identifier": caregiver_email, "password": "secret123", "role": "caregiver"},
+        )
+        assert caregiver_login.status_code == 200, caregiver_login.text
+        created = client.post(
+            "/patients/",
+            headers=auth_headers(caregiver_login.json()["access_token"]),
             json={
-                "role": "patient",
                 "username": username,
                 "password": password,
                 "full_name": "Paciente Test",
-                "caregiver_email": caregiver_email,
             },
+        )
+        assert created.status_code == 200, created.text
+        response = client.post(
+            "/auth/login",
+            json={"identifier": username, "password": password, "role": "patient"},
         )
         assert response.status_code == 200, response.text
         return response.json()

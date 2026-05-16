@@ -160,19 +160,18 @@ def test_external_server_memory_endpoints_use_seeded_stm_and_journal(external_ba
             },
         )
         assert caregiver.status_code == 200, caregiver.text
+        caregiver_token = caregiver.json()["access_token"]
         patient = client.post(
-            "/auth/register",
+            "/patients/",
+            headers=auth_headers(caregiver_token),
             json={
-                "role": "patient",
                 "username": "server_flow_patient",
                 "password": "secret123",
                 "full_name": "Paciente Server",
-                "caregiver_email": caregiver_email,
             },
         )
         assert patient.status_code == 200, patient.text
 
-        caregiver_token = caregiver.json()["access_token"]
         patients = client.get("/patients/", headers=auth_headers(caregiver_token))
         assert patients.status_code == 200, patients.text
         patient_id = patients.json()[0]["id"]

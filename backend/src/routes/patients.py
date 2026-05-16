@@ -15,9 +15,10 @@ from ..models.user import User
 from ..models.patient import Patient, PatientContext
 from ..models.journal import JournalEntry
 from ..models.alert import Alert
-from ..schemas.patient import PatientOut, PatientContextUpdate, PatientContextOut, ShortTermMemoryOut
+from ..schemas.patient import PatientCreate, PatientOut, PatientContextUpdate, PatientContextOut, ShortTermMemoryOut
 from ..schemas.journal import JournalEntryOut
 from ..auth import require_caregiver, require_patient
+from ..services.patient_account_service import create_patient_account
 from ..services.memory_service import get_short_term
 from ..services.expo_push_service import notify_caregiver_alert
 from ..services.retention_service import cleanup_patient_retention_safely
@@ -43,6 +44,38 @@ def _get_owned_patient(patient_id: int, db: Session, user: User) -> Patient:
     return patient
 
 
+def _patient_out(patient: Patient, patient_user: User) -> PatientOut:
+    return PatientOut(
+        id=patient.id,
+        user_id=patient_user.id,
+        full_name=patient_user.full_name,
+        username=patient_user.username,
+        birth_date=patient.birth_date,
+        notes=patient.notes,
+        created_at=patient.created_at,
+    )
+
+
+@router.post("/", response_model=PatientOut)
+def create_patient(
+    body: PatientCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_caregiver),
+):
+    """Create a patient account linked to the current caregiver."""
+    patient_user, patient = create_patient_account(
+        db,
+        full_name=body.full_name,
+        username=body.username,
+        password=body.password,
+        caregiver_id=user.id,
+    )
+    db.commit()
+    db.refresh(patient_user)
+    db.refresh(patient)
+    return _patient_out(patient, patient_user)
+
+
 @router.get("/", response_model=list[PatientOut])
 def list_patients(db: Session = Depends(get_db), user: User = Depends(require_caregiver)):
     """List all patients linked to this caregiver."""
@@ -54,15 +87,7 @@ def list_patients(db: Session = Depends(get_db), user: User = Depends(require_ca
     for pu in patient_users:
         p = db.query(Patient).filter(Patient.user_id == pu.id).first()
         if p:
-            results.append(PatientOut(
-                id=p.id,
-                user_id=pu.id,
-                full_name=pu.full_name,
-                username=pu.username,
-                birth_date=p.birth_date,
-                notes=p.notes,
-                created_at=p.created_at,
-            ))
+            results.append(_patient_out(p, pu))
     return results
 
 

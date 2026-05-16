@@ -5,6 +5,7 @@ from src.services.episode_detector import (
     _build_analysis_prompt,
     _extract_patient_text,
     _extract_possible_patient_text,
+    _extract_rule_patient_text,
 )
 
 
@@ -44,13 +45,26 @@ def test_non_matching_rule_does_not_trigger_episode():
 
 
 @pytest.mark.asyncio
-async def test_uncertain_patient_tag_does_not_trigger_deterministic_rules():
+async def test_uncertain_patient_tag_triggers_deterministic_rules():
     detector = EpisodeDetector({})
     transcript = "[PACIENTE?] ayuda por favor"
 
     result = await detector.analyze(transcript, use_llm=False)
 
     assert _extract_patient_text(transcript) == ""
+    assert _extract_rule_patient_text(transcript) == "ayuda por favor"
+    assert result.is_episode is True
+    assert result.severity == 5
+
+
+@pytest.mark.asyncio
+async def test_other_tag_still_does_not_trigger_deterministic_rules():
+    detector = EpisodeDetector({})
+    transcript = "[OTRO] ayuda por favor"
+
+    result = await detector.analyze(transcript, use_llm=False)
+
+    assert _extract_rule_patient_text(transcript) == ""
     assert result.is_episode is False
     assert result.severity == 0
 

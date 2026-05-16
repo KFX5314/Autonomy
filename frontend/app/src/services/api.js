@@ -67,6 +67,17 @@ export async function getPatients() {
   return request("/patients/");
 }
 
+export async function createPatientForCaregiver({ fullName, username, password }) {
+  return request("/patients/", {
+    method: "POST",
+    body: JSON.stringify({
+      full_name: fullName,
+      username: username || null,
+      password,
+    }),
+  });
+}
+
 export async function getPatientContext(patientId) {
   return request(`/patients/${patientId}/context`);
 }

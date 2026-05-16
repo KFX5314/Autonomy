@@ -12,11 +12,15 @@ import {
   RefreshControl,
   Platform,
   AppState,
+  Modal,
+  TextInput,
+  KeyboardAvoidingView,
 } from "react-native";
 import * as Notifications from "expo-notifications";
 import { useFocusEffect } from "@react-navigation/native";
 import appConfig from "../config/appConfig";
 import {
+  createPatientForCaregiver,
   getPatients,
   getPatientContext,
   getAlerts,
@@ -28,6 +32,58 @@ import {
 import AlertCard from "../components/AlertCard";
 
 const { caregiver } = appConfig;
+
+const USERNAME_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789";
+
+function randomUsernameBase() {
+  let suffix = "";
+  for (let i = 0; i < 6; i += 1) {
+    suffix += USERNAME_CHARS[Math.floor(Math.random() * USERNAME_CHARS.length)];
+  }
+  return `pac${suffix}`;
+}
+
+function usernameTokens(fullName) {
+  return String(fullName || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function generatedUsernameBase(fullName) {
+  try {
+    const tokens = usernameTokens(fullName);
+    let base = "";
+    if (tokens.length >= 2) base = `${tokens[0].slice(0, 3)}${tokens[1].slice(0, 3)}`;
+    else if (tokens.length === 1) base = tokens[0].slice(0, 6);
+    else base = randomUsernameBase();
+    if (base.length < 3) base = `${base}${randomUsernameBase()}`.slice(0, 9);
+    return /^[a-z0-9_.-]{3,64}$/.test(base) ? base : randomUsernameBase();
+  } catch {
+    return randomUsernameBase();
+  }
+}
+
+function suggestPatientUsername(fullName, patients) {
+  const existing = new Set(
+    patients
+      .map((patient) => String(patient.username || "").trim().toLowerCase())
+      .filter(Boolean)
+  );
+  let base = generatedUsernameBase(fullName);
+  let candidate = base;
+  let suffix = 0;
+  while (existing.has(candidate)) {
+    suffix += 1;
+    const suffixText = String(suffix);
+    candidate = `${base.slice(0, 64 - suffixText.length)}${suffixText}`;
+  }
+  return candidate;
+}
 
 async function registerCaregiverPushToken() {
   if (Platform.OS === "web") return null;
@@ -108,6 +164,12 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext, onO
   const [journalLoading, setJournalLoading] = useState(false);
   const [shortTermMemory, setShortTermMemory] = useState(null);
   const [stmLoading, setStmLoading] = useState(false);
+  const [addPatientVisible, setAddPatientVisible] = useState(false);
+  const [newPatientFullName, setNewPatientFullName] = useState("");
+  const [newPatientUsername, setNewPatientUsername] = useState("");
+  const [newPatientUsernameEdited, setNewPatientUsernameEdited] = useState(false);
+  const [newPatientPassword, setNewPatientPassword] = useState("");
+  const [creatingPatient, setCreatingPatient] = useState(false);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -158,6 +220,63 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext, onO
       if (showSpinner) setRefreshing(false);
     }
   }, []);
+
+  const resetAddPatientForm = useCallback(() => {
+    setNewPatientFullName("");
+    setNewPatientUsername("");
+    setNewPatientUsernameEdited(false);
+    setNewPatientPassword("");
+  }, []);
+
+  const openAddPatient = useCallback(() => {
+    resetAddPatientForm();
+    setAddPatientVisible(true);
+  }, [resetAddPatientForm]);
+
+  const closeAddPatient = useCallback(() => {
+    if (creatingPatient) return;
+    setAddPatientVisible(false);
+    resetAddPatientForm();
+  }, [creatingPatient, resetAddPatientForm]);
+
+  const handleNewPatientFullNameChange = useCallback((value) => {
+    setNewPatientFullName(value);
+    if (!newPatientUsernameEdited) {
+      setNewPatientUsername(suggestPatientUsername(value, patients));
+    }
+  }, [newPatientUsernameEdited, patients]);
+
+  const handleNewPatientUsernameChange = useCallback((value) => {
+    setNewPatientUsernameEdited(true);
+    setNewPatientUsername(value);
+  }, []);
+
+  const handleCreatePatient = useCallback(async () => {
+    const fullName = newPatientFullName.trim();
+    const username = newPatientUsername.trim();
+    const password = newPatientPassword;
+
+    if (!fullName) {
+      Alert.alert("Error", "El nombre del paciente es obligatorio");
+      return;
+    }
+    if (!password) {
+      Alert.alert("Error", "La contraseña inicial es obligatoria");
+      return;
+    }
+
+    setCreatingPatient(true);
+    try {
+      await createPatientForCaregiver({ fullName, username: username || null, password });
+      setAddPatientVisible(false);
+      resetAddPatientForm();
+      await refresh({ silent: false, showSpinner: false });
+    } catch (e) {
+      Alert.alert("Error", e.message);
+    } finally {
+      setCreatingPatient(false);
+    }
+  }, [newPatientFullName, newPatientPassword, newPatientUsername, refresh, resetAddPatientForm]);
 
   useFocusEffect(
     useCallback(() => {
@@ -288,9 +407,26 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext, onO
         </Pressable>
       </View>
 
-      <Text style={styles.sectionTitle}>Mis pacientes</Text>
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionTitle}>Mis pacientes</Text>
+        <Pressable
+          style={({ pressed }) => [styles.addPatientBtn, pressed && styles.addPatientBtnPressed]}
+          onPress={openAddPatient}
+        >
+          <Text style={styles.addPatientIcon}>+</Text>
+          <Text style={styles.addPatientLabel}>Añadir</Text>
+        </Pressable>
+      </View>
       {patients.length === 0 && loaded ? (
-        <Text style={styles.empty}>No hay pacientes vinculados aun.</Text>
+        <View style={styles.emptyPatientsBox}>
+          <Text style={styles.empty}>No hay pacientes vinculados aun.</Text>
+          <Pressable
+            style={({ pressed }) => [styles.emptyAddBtn, pressed && styles.addPatientBtnPressed]}
+            onPress={openAddPatient}
+          >
+            <Text style={styles.emptyAddText}>Añadir paciente</Text>
+          </Pressable>
+        </View>
       ) : (
         <FlatList
           data={patients}
@@ -462,6 +598,61 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext, onO
           />
         </>
       )}
+
+      <Modal
+        visible={addPatientVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={closeAddPatient}
+      >
+        <KeyboardAvoidingView
+          style={styles.modalBackdrop}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+        >
+          <View style={styles.addPatientModal}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Añadir paciente</Text>
+              <CloseButton onPress={closeAddPatient} />
+            </View>
+            <TextInput
+              style={styles.modalInput}
+              placeholder="Nombre completo"
+              value={newPatientFullName}
+              onChangeText={handleNewPatientFullNameChange}
+              editable={!creatingPatient}
+            />
+            <TextInput
+              style={styles.modalInput}
+              placeholder="Usuario del paciente"
+              value={newPatientUsername}
+              onChangeText={handleNewPatientUsernameChange}
+              autoCapitalize="none"
+              editable={!creatingPatient}
+            />
+            <TextInput
+              style={styles.modalInput}
+              placeholder="Contraseña inicial"
+              value={newPatientPassword}
+              onChangeText={setNewPatientPassword}
+              secureTextEntry
+              editable={!creatingPatient}
+            />
+            <Pressable
+              style={({ pressed }) => [
+                styles.savePatientBtn,
+                pressed && styles.savePatientBtnPressed,
+                creatingPatient && styles.savePatientBtnDisabled,
+              ]}
+              onPress={handleCreatePatient}
+              disabled={creatingPatient}
+            >
+              <Text style={styles.savePatientText}>
+                {creatingPatient ? "Creando..." : "Crear paciente"}
+              </Text>
+            </Pressable>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
@@ -488,9 +679,44 @@ const styles = StyleSheet.create({
   },
   historyBtnPressed: { backgroundColor: "#DCEAF8" },
   historyLabel: { color: "#4A90D9", fontSize: 14, fontWeight: "600" },
+  sectionHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 4,
+    marginBottom: 10,
+  },
   sectionRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 16, marginBottom: 10 },
   sectionTitle: { fontSize: 18, fontWeight: "700" },
   empty: { color: "#999", marginBottom: 10 },
+  addPatientBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "#4A90D9",
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  addPatientBtnPressed: { backgroundColor: "#3B7FC4" },
+  addPatientIcon: { color: "#fff", fontSize: 18, lineHeight: 18, fontWeight: "800" },
+  addPatientLabel: { color: "#fff", fontSize: 14, fontWeight: "700" },
+  emptyPatientsBox: {
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#E0E0E0",
+    padding: 16,
+    marginBottom: 12,
+  },
+  emptyAddBtn: {
+    alignSelf: "flex-start",
+    backgroundColor: "#4A90D9",
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  emptyAddText: { color: "#fff", fontSize: 14, fontWeight: "700" },
   detailPanel: {
     flex: 1,
     backgroundColor: "#EEF4FA",
@@ -577,4 +803,43 @@ const styles = StyleSheet.create({
   closeBtnPressed: { backgroundColor: "#3B7FC4" },
   closeIcon: { color: "#fff", fontSize: 18, lineHeight: 18, fontWeight: "800" },
   closeLabel: { color: "#fff", fontSize: 14, fontWeight: "700" },
+  modalBackdrop: {
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(0,0,0,0.28)",
+  },
+  addPatientModal: {
+    backgroundColor: "#F5F7FA",
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: "#D9E7F5",
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 14,
+  },
+  modalTitle: { fontSize: 20, fontWeight: "800" },
+  modalInput: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 14,
+    fontSize: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "#E0E0E0",
+  },
+  savePatientBtn: {
+    backgroundColor: "#4A90D9",
+    borderRadius: 12,
+    paddingVertical: 15,
+    alignItems: "center",
+    marginTop: 2,
+  },
+  savePatientBtnPressed: { backgroundColor: "#3B7FC4" },
+  savePatientBtnDisabled: { opacity: 0.6 },
+  savePatientText: { color: "#fff", fontSize: 16, fontWeight: "800" },
 });

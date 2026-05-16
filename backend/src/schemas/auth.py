@@ -6,8 +6,8 @@ class RegisterRequest(BaseModel):
     username: str | None = None
     password: str
     full_name: str
-    role: str  # "caregiver" or "patient"
-    caregiver_email: EmailStr | None = None  # required if role == "patient"
+    role: str  # public registration only accepts "caregiver"
+    caregiver_email: EmailStr | None = None
 
 
 class LoginRequest(BaseModel):
