@@ -155,7 +155,7 @@ def test_short_term_preserves_fragment_order_inside_transcript(db_session):
         db_session,
         patient.id,
         now.replace(tzinfo=None) - timedelta(seconds=10),
-        "[PACIENTE] Hola asistente. [ASSISTANT] Hola, estoy contigo.",
+        "[PACIENTE] Hola asistente. [ASISTENTE] Hola, estoy contigo.",
     )
     db_session.commit()
 
@@ -167,7 +167,7 @@ def test_short_term_preserves_fragment_order_inside_transcript(db_session):
     ).splitlines()
 
     assert lines[0].endswith("[PACIENTE] Hola asistente.")
-    assert lines[1].endswith("[ASSISTANT] Hola, estoy contigo.")
+    assert lines[1].endswith("[ASISTENTE] Hola, estoy contigo.")
 
 
 @pytest.mark.asyncio
@@ -175,9 +175,9 @@ async def test_journal_summary_can_include_assistant_and_other_lines(db_session,
     patient = _make_patient(db_session)
     now = datetime(2026, 5, 12, 12, 7, tzinfo=timezone.utc)
     base = now.replace(tzinfo=None)
-    _add_transcript(db_session, patient.id, base - timedelta(minutes=3), "[ASSISTANT] Esta todo bien?")
+    _add_transcript(db_session, patient.id, base - timedelta(minutes=3), "[ASISTENTE] Esta todo bien?")
     _add_transcript(db_session, patient.id, base - timedelta(minutes=2), "[OTRO] Si, esta conmigo.")
-    _add_transcript(db_session, patient.id, base - timedelta(minutes=1), "[ASSISTANT] Me quedo pendiente.")
+    _add_transcript(db_session, patient.id, base - timedelta(minutes=1), "[ASISTENTE] Me quedo pendiente.")
     db_session.commit()
 
     fake = FakeLLM("El asistente pregunto si todo iba bien y otra persona confirmo que estaba acompanado.")
@@ -188,7 +188,7 @@ async def test_journal_summary_can_include_assistant_and_other_lines(db_session,
     entry = db_session.query(JournalEntry).filter(JournalEntry.patient_id == patient.id).one()
     assert "acompanado" in entry.summary_text
     assert len(fake.calls) == 1
-    assert "[ASSISTANT]" in fake.calls[0][1]
+    assert "[ASISTENTE]" in fake.calls[0][1]
     assert "[OTRO]" in fake.calls[0][1]
 
 

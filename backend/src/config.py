@@ -175,8 +175,8 @@ class Config:
     JOURNAL_RETENTION_HOURS: int = field(default_factory=lambda: int(os.getenv("JOURNAL_RETENTION_HOURS", "24")))
     JOURNAL_MAX_ENTRIES: int = field(default_factory=lambda: int(os.getenv("JOURNAL_MAX_ENTRIES", "50")))
 
-    # Transcript retention. Cleanup runs piggy-backed on the journal background
-    # task, so cost is essentially zero.
+    # Transcript retention. Cleanup runs in background journal compaction and
+    # opportunistically on caregiver reads.
     TRANSCRIPT_RETENTION_DAYS: int = field(default_factory=lambda: int(os.getenv("TRANSCRIPT_RETENTION_DAYS", "14")))
     TRANSCRIPT_MAX_ROWS: int = field(default_factory=lambda: int(os.getenv("TRANSCRIPT_MAX_ROWS", "5000")))
 
@@ -189,6 +189,10 @@ class Config:
     ))
     ALERT_AUDIO_MAX_FILES_PER_PATIENT: int = field(default_factory=lambda: int(os.getenv("ALERT_AUDIO_MAX_FILES_PER_PATIENT", "50")))
     ALERT_AUDIO_MAX_DAYS: int = field(default_factory=lambda: int(os.getenv("ALERT_AUDIO_MAX_DAYS", "30")))
+
+    # Expo push notifications for caregiver alerts.
+    EXPO_PUSH_URL: str = field(default_factory=lambda: os.getenv("EXPO_PUSH_URL", "https://exp.host/--/api/v2/push/send"))
+    EXPO_PUSH_TIMEOUT_SECONDS: float = field(default_factory=lambda: float(os.getenv("EXPO_PUSH_TIMEOUT_SECONDS", "5")))
 
     @property
     def database_url(self) -> str:

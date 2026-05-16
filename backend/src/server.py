@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import config, DEV_JWT_SECRET, DEV_DB_PASSWORD
 from .database import engine, Base
 from .middleware.size_limit import BodySizeLimitMiddleware
-from .routes import auth_router, patients_router, audio_router, alerts_router
+from .routes import auth_router, patients_router, audio_router, alerts_router, push_tokens_router
 from .services.llm import get_llm_provider
 from .services.llm.ollama_provider import OllamaProvider
 
@@ -163,6 +163,7 @@ app.include_router(auth_router)
 app.include_router(patients_router)
 app.include_router(audio_router)
 app.include_router(alerts_router)
+app.include_router(push_tokens_router)
 
 
 @app.get("/health")

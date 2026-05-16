@@ -12,6 +12,7 @@ const publicEnv = {
   audioChunkMaxRetries: process.env.EXPO_PUBLIC_AUDIO_CHUNK_MAX_RETRIES,
   audioChunkRetryDelayMs: process.env.EXPO_PUBLIC_AUDIO_CHUNK_RETRY_DELAY_MS,
   caregiverAlertRefreshMs: process.env.EXPO_PUBLIC_CAREGIVER_ALERT_REFRESH_MS,
+  caregiverLiveRefreshMs: process.env.EXPO_PUBLIC_CAREGIVER_LIVE_REFRESH_MS,
   vadDefaultThresholdDb: process.env.EXPO_PUBLIC_VAD_DEFAULT_THRESHOLD_DB,
   vadSilenceDurationMs: process.env.EXPO_PUBLIC_VAD_SILENCE_DURATION_MS,
   vadMinChunkMs: process.env.EXPO_PUBLIC_VAD_MIN_CHUNK_MS,
@@ -29,7 +30,7 @@ const publicEnv = {
   vadCalibrationSilencePercentile: process.env.EXPO_PUBLIC_VAD_CALIBRATION_SILENCE_PERCENTILE,
   vadMeteringFloorDb: process.env.EXPO_PUBLIC_VAD_METERING_FLOOR_DB,
   ttsLanguage: process.env.EXPO_PUBLIC_TTS_LANGUAGE,
-  ttsAssistantRate: process.env.EXPO_PUBLIC_TTS_ASSISTANT_RATE,
+  ttsAsistenteRate: process.env.EXPO_PUBLIC_TTS_ASISTENTE_RATE,
   ttsEpisodeRate: process.env.EXPO_PUBLIC_TTS_EPISODE_RATE,
   ttsEchoMetadataWindowMs: process.env.EXPO_PUBLIC_TTS_ECHO_METADATA_WINDOW_MS,
   voiceSampleDurationMs: process.env.EXPO_PUBLIC_VOICE_SAMPLE_DURATION_MS,
@@ -80,6 +81,7 @@ const appConfig = {
   // Caregiver dashboard behavior.
   caregiver: {
     alertRefreshMs: envInt("EXPO_PUBLIC_CAREGIVER_ALERT_REFRESH_MS", publicEnv.caregiverAlertRefreshMs, 10000),
+    liveRefreshMs: envInt("EXPO_PUBLIC_CAREGIVER_LIVE_REFRESH_MS", publicEnv.caregiverLiveRefreshMs, 1000),
   },
 
   // Patient recording VAD/chunking thresholds and calibration knobs.
@@ -133,7 +135,7 @@ const appConfig = {
   // Local text-to-speech playback settings.
   tts: {
     language: envString("EXPO_PUBLIC_TTS_LANGUAGE", publicEnv.ttsLanguage, "es-ES"),
-    assistantRate: envFloat("EXPO_PUBLIC_TTS_ASSISTANT_RATE", publicEnv.ttsAssistantRate, 0.9),
+    assistantRate: envFloat("EXPO_PUBLIC_TTS_ASISTENTE_RATE", publicEnv.ttsAsistenteRate, 0.9),
     episodeRate: envFloat("EXPO_PUBLIC_TTS_EPISODE_RATE", publicEnv.ttsEpisodeRate, 0.85),
     echoMetadataWindowMs: envInt(
       "EXPO_PUBLIC_TTS_ECHO_METADATA_WINDOW_MS",

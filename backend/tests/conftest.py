@@ -19,12 +19,13 @@ if str(BACKEND_DIR) not in sys.path:
 
 from src.database import Base, get_db
 from src.middleware.size_limit import BodySizeLimitMiddleware
-from src.routes import alerts_router, audio_router, auth_router, patients_router
+from src.routes import alerts_router, audio_router, auth_router, patients_router, push_tokens_router
 
 # Import models so Base.metadata contains every table.
 from src.models.alert import Alert, ConversationHistory  # noqa: F401
 from src.models.journal import JournalEntry  # noqa: F401
 from src.models.patient import Patient, PatientContext  # noqa: F401
+from src.models.push_token import PushToken  # noqa: F401
 from src.models.transcript import Transcript  # noqa: F401
 from src.models.user import User  # noqa: F401
 
@@ -111,6 +112,7 @@ def app(db_engine, clean_database):
     test_app.include_router(patients_router)
     test_app.include_router(audio_router)
     test_app.include_router(alerts_router)
+    test_app.include_router(push_tokens_router)
 
     @test_app.get("/health")
     async def health():

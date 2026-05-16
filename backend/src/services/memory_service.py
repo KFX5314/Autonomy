@@ -28,7 +28,7 @@ from .llm import get_llm_provider
 logger = logging.getLogger(__name__)
 
 
-_TAG_NAME = r"PACIENTE\?|PACIENTE|OTRO|ASSISTANT"
+_TAG_NAME = r"PACIENTE\?|PACIENTE|OTRO|ASISTENTE"
 _ANY_TAG = rf"(?:{_TAG_NAME})"
 _MEMORY_LINE = re.compile(
     rf"\[({_TAG_NAME})\]\s*(.+?)(?=\s*\[{_ANY_TAG}\]|\s*$)",
@@ -67,7 +67,7 @@ def _extract_memory_lines(
     """
     if not transcript_text:
         return []
-    if all(tag not in transcript_text for tag in ("[PACIENTE]", "[PACIENTE?]", "[OTRO]", "[ASSISTANT]")):
+    if all(tag not in transcript_text for tag in ("[PACIENTE]", "[PACIENTE?]", "[OTRO]", "[ASISTENTE]")):
         text = transcript_text.strip()
         return [("PACIENTE", text)] if text else []
 
@@ -75,7 +75,7 @@ def _extract_memory_lines(
     if include_uncertain_patient:
         allowed.add("PACIENTE?")
     if include_assistant:
-        allowed.add("ASSISTANT")
+        allowed.add("ASISTENTE")
     if include_other:
         allowed.add("OTRO")
 
@@ -234,7 +234,7 @@ def _journal_summary_items(
 
 
 def _journal_has_patient_or_assistant_material(items: list[_STMItem]) -> bool:
-    return any(item.tag in {"PACIENTE", "PACIENTE?", "ASSISTANT"} for item in items)
+    return any(item.tag in {"PACIENTE", "PACIENTE?", "ASISTENTE"} for item in items)
 
 
 def _journal_items_have_new_coverage(patient_id: int, db: Session, items: list[_STMItem]) -> bool:
@@ -341,7 +341,7 @@ async def summarize_and_append(
             "Transcripciones recientes con hora y etiqueta de hablante:\n"
             "- [PACIENTE] es el paciente identificado.\n"
             "- [PACIENTE?] es posible paciente con identificacion de voz dudosa; no lo presentes como hecho seguro sin contexto.\n"
-            "- [ASSISTANT] son respuestas habladas del sistema.\n"
+            "- [ASISTENTE] son respuestas habladas del sistema.\n"
             "- [OTRO] son otras personas o sonido transcrito del entorno; usalo solo como contexto y no infieras que es cuidador, familiar o paciente.\n\n"
             f"{stm}\n\n"
             "Escribe una entrada de diario."

@@ -106,7 +106,7 @@ def test_deleting_base_sample_recalculates_remaining_voice_sample_states():
 
 
 def test_tag_parsers_handle_uncertain_patient():
-    transcript = "[PACIENTE?] ayuda\n[OTRO] hola\n[PACIENTE] no se donde estoy\n[ASSISTANT] ya aviso"
+    transcript = "[PACIENTE?] ayuda\n[OTRO] hola\n[PACIENTE] no se donde estoy\n[ASISTENTE] ya aviso"
 
     assert _extract_patient_text(transcript) == "no se donde estoy"
     assert _extract_possible_patient_text(transcript) == (
@@ -115,7 +115,7 @@ def test_tag_parsers_handle_uncertain_patient():
     assert _extract_memory_lines(transcript) == [
         ("PACIENTE?", "ayuda"),
         ("PACIENTE", "no se donde estoy"),
-        ("ASSISTANT", "ya aviso"),
+        ("ASISTENTE", "ya aviso"),
     ]
 
 

@@ -6,12 +6,12 @@ import { getAlertAudioUrl, getAuthHeader } from "../services/api";
 function renderTaggedTranscript(text) {
   if (!text) return null;
   const parts = text
-    .split(/(\[PACIENTE\?\]|\[PACIENTE\]|\[OTRO\]|\[ASSISTANT\])/g)
+    .split(/(\[PACIENTE\?\]|\[PACIENTE\]|\[OTRO\]|\[ASISTENTE\])/g)
     .filter((p) => p.trim());
   const blocks = [];
   let currentTag = null;
   for (const part of parts) {
-    if (part === "[PACIENTE]" || part === "[PACIENTE?]" || part === "[OTRO]" || part === "[ASSISTANT]") {
+    if (part === "[PACIENTE]" || part === "[PACIENTE?]" || part === "[OTRO]" || part === "[ASISTENTE]") {
       currentTag = part;
       continue;
     }
@@ -29,7 +29,7 @@ function renderTaggedTranscript(text) {
           ? styles.transcriptPatient
           : b.tag === "[PACIENTE?]"
             ? styles.transcriptMaybePatient
-            : b.tag === "[ASSISTANT]"
+            : b.tag === "[ASISTENTE]"
               ? styles.transcriptAssistant
               : styles.transcriptOther,
       ]}

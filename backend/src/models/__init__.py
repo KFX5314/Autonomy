@@ -5,6 +5,7 @@ from .patient import Patient, PatientContext
 from .transcript import Transcript
 from .alert import Alert, ConversationHistory
 from .journal import JournalEntry
+from .push_token import PushToken
 
 __all__ = [
     "User",
@@ -14,4 +15,5 @@ __all__ = [
     "Alert",
     "ConversationHistory",
     "JournalEntry",
+    "PushToken",
 ]

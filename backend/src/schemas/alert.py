@@ -29,7 +29,7 @@ class AudioChunkResponse(BaseModel):
     reason: str = ""
     reply_text: str | None = None
     alert_id: int | None = None
-    # "idle" (no action, including stored [ASSISTANT] echo), "episode" (alert
+    # "idle" (no action, including stored [ASISTENTE] echo), "episode" (alert
     # fired), "assistant" (wake-word QA).
     mode: str = "idle"
     segments: list[dict] = []    # [{"start": float, "end": float}] for VAD calibration

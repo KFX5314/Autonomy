@@ -125,6 +125,23 @@ export async function ackAlert(alertId, status = "ACK") {
   });
 }
 
+export async function registerPushToken({ token, platform, deviceId }) {
+  return request("/push-tokens/", {
+    method: "POST",
+    body: JSON.stringify({
+      token,
+      platform: platform || null,
+      device_id: deviceId || null,
+    }),
+  });
+}
+
+export async function deletePushToken(token) {
+  return request(`/push-tokens/?token=${encodeURIComponent(token)}`, {
+    method: "DELETE",
+  });
+}
+
 // Audio.Sound accepts auth headers when loading protected alert audio.
 export function getAlertAudioUrl(alertId) {
   return `${api.baseUrl}/alerts/${alertId}/audio`;

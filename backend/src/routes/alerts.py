@@ -17,6 +17,7 @@ from ..models.transcript import Transcript
 from ..models.user import User
 from ..schemas.alert import AlertAck, AlertOut
 from ..services.alert_audio_retention import delete_alert_audio
+from ..services.retention_service import cleanup_patients_retention_safely
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
@@ -60,6 +61,7 @@ def list_alerts(
 
     patients = db.query(Patient).filter(Patient.user_id.in_(patient_user_ids)).all()
     patient_ids = [p.id for p in patients]
+    cleanup_patients_retention_safely(db, patient_ids)
 
     query = db.query(Alert).filter(Alert.patient_id.in_(patient_ids))
     if patient_id is not None:

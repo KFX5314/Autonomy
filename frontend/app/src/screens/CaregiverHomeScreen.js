@@ -10,7 +10,10 @@ import {
   StyleSheet,
   Alert,
   RefreshControl,
+  Platform,
+  AppState,
 } from "react-native";
+import * as Notifications from "expo-notifications";
 import { useFocusEffect } from "@react-navigation/native";
 import appConfig from "../config/appConfig";
 import {
@@ -20,10 +23,35 @@ import {
   ackAlert,
   getPatientJournal,
   getPatientShortTermMemory,
+  registerPushToken,
 } from "../services/api";
 import AlertCard from "../components/AlertCard";
 
 const { caregiver } = appConfig;
+
+async function registerCaregiverPushToken() {
+  if (Platform.OS === "web") return null;
+
+  const existing = await Notifications.getPermissionsAsync();
+  let status = existing.status;
+  if (status !== "granted") {
+    const requested = await Notifications.requestPermissionsAsync();
+    status = requested.status;
+  }
+  if (status !== "granted") return null;
+
+  if (Platform.OS === "android") {
+    await Notifications.setNotificationChannelAsync("alerts", {
+      name: "Alertas",
+      importance: Notifications.AndroidImportance.MAX,
+      vibrationPattern: [0, 250, 250, 250],
+      lightColor: "#E74C3C",
+    });
+  }
+
+  const token = (await Notifications.getExpoPushTokenAsync()).data;
+  return token || null;
+}
 
 function PatientActionButton({ icon, label, onPress, color }) {
   return (
@@ -80,6 +108,29 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext, onO
   const [journalLoading, setJournalLoading] = useState(false);
   const [shortTermMemory, setShortTermMemory] = useState(null);
   const [stmLoading, setStmLoading] = useState(false);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    if (user?.role !== "caregiver") return undefined;
+
+    (async () => {
+      try {
+        const token = await registerCaregiverPushToken();
+        if (!token || cancelled) return;
+        await registerPushToken({
+          token,
+          platform: Platform.OS,
+          deviceId: String(user?.user_id || user?.id || ""),
+        });
+      } catch (e) {
+        console.warn("Could not register push token:", e?.message || e);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, user?.role, user?.user_id]);
 
   const refresh = useCallback(async ({ silent = false, showSpinner = true } = {}) => {
     if (showSpinner) setRefreshing(true);
@@ -141,15 +192,15 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext, onO
     }
   }, []);
 
-  const loadShortTermMemory = useCallback(async (patientId, { silent = false } = {}) => {
-    setStmLoading(true);
+  const loadShortTermMemory = useCallback(async (patientId, { silent = false, showSpinner = true } = {}) => {
+    if (showSpinner) setStmLoading(true);
     try {
       const data = await getPatientShortTermMemory(patientId);
       setShortTermMemory(data);
     } catch (e) {
       if (!silent) Alert.alert("Error", e.message);
     } finally {
-      setStmLoading(false);
+      if (showSpinner) setStmLoading(false);
     }
   }, []);
 
@@ -161,6 +212,41 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext, onO
       loadShortTermMemory(detailPatient.id);
     }
   }, [detailPatient, detailTab, loadJournal, loadShortTermMemory]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!detailPatient || detailTab !== "advanced") return undefined;
+      const refreshMs = Math.max(1000, caregiver.liveRefreshMs);
+      let interval = null;
+
+      const stop = () => {
+        if (interval) {
+          clearInterval(interval);
+          interval = null;
+        }
+      };
+      const start = () => {
+        if (interval) return;
+        interval = setInterval(() => {
+          loadShortTermMemory(detailPatient.id, { silent: true, showSpinner: false });
+        }, refreshMs);
+      };
+
+      if (AppState.currentState === "active") start();
+      const subscription = AppState.addEventListener("change", (state) => {
+        if (state === "active") {
+          start();
+        } else {
+          stop();
+        }
+      });
+
+      return () => {
+        stop();
+        subscription.remove();
+      };
+    }, [detailPatient, detailTab, loadShortTermMemory])
+  );
 
   const openPatientDetail = useCallback((patient, tab) => {
     setShowHistory(false);

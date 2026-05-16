@@ -31,6 +31,7 @@ from ..services.memory_service import (
     summarize_and_append,
 )
 from ..services.alert_audio_retention import enforce_patient_audio_cap
+from ..services.expo_push_service import notify_caregiver_alert
 from ..config import config
 
 import logging
@@ -86,11 +87,35 @@ def _response_segments(segments: list[dict]) -> list[dict]:
             "speaker_confidence",
             "speaker_sample_id",
             "speaker_reference_strategy",
+            "tts_echo_ratio",
+            "tts_echo_age_ms",
         ):
             if key in s:
                 item[key] = s[key]
         out.append(item)
     return out
+
+
+def _mark_assistant_echo_segment(seg: dict, match) -> None:
+    seg["speaker"] = "ASISTENTE"
+    seg["speaker_similarity"] = None
+    seg["speaker_confidence"] = "tts_echo"
+    seg["tts_echo_ratio"] = match.ratio
+    seg["tts_echo_age_ms"] = match.recent_tts_age_ms
+
+
+def _mark_tts_echo_segments(
+    segments: list[dict],
+    recent_tts_text: str | None,
+    recent_tts_age_ms: int | None,
+) -> int:
+    echo_count = 0
+    for seg in segments:
+        match = detect_tts_echo(seg.get("text", ""), recent_tts_text, recent_tts_age_ms)
+        if match:
+            _mark_assistant_echo_segment(seg, match)
+            echo_count += 1
+    return echo_count
 
 
 def _has_recent_assistant_transcript(
@@ -109,7 +134,7 @@ def _has_recent_assistant_transcript(
         db.query(Transcript)
         .filter(Transcript.patient_id == patient_id)
         .filter(Transcript.started_at >= cutoff)
-        .filter(Transcript.transcript_text.like("[ASSISTANT]%"))
+        .filter(Transcript.transcript_text.like("[ASISTENTE]%"))
         .order_by(Transcript.started_at.desc())
         .limit(10)
         .all()
@@ -208,30 +233,56 @@ async def process_audio_chunk(
                     is_assistant_echo = True
                     transcript_text = tag_as_assistant(transcript_text)
                     for seg in segments:
-                        seg["speaker"] = "ASSISTANT"
-                        seg["speaker_confidence"] = "tts_echo"
+                        _mark_assistant_echo_segment(seg, echo_match)
                     print(
                         f"\033[94m  [TTS] Eco del asistente detectado "
                         f"(ratio {echo_match.ratio:.2f}, edad {echo_match.recent_tts_age_ms} ms)\033[0m"
                     )
                     print(f"\033[96m  [TAG] TRANSCRIPCION ETIQUETADA:\033[0m")
                     print(f"     {transcript_text}")
-                elif patient.voice_embedding and segments:
-                    speaker_verified = True
-                    segments = diarize_segments(
-                        tmp_path, segments, patient.voice_embedding
-                    )
-                    has_patient_like_speaker = any(
-                        seg.get("speaker") in {"PACIENTE", "PACIENTE?"}
-                        for seg in segments
-                    )
-                    transcript_text = build_tagged_transcript(segments)
-                    print(f"\033[96m  [TAG] TRANSCRIPCION ETIQUETADA:\033[0m")
-                    for line in transcript_text.split("\n"):
-                        print(f"     {line}")
                 else:
-                    if not patient.voice_embedding:
-                        print("\033[93m  [!] Sin muestra de voz - no se identifica hablante\033[0m")
+                    tts_echo_segments = _mark_tts_echo_segments(
+                        segments,
+                        recent_tts_text,
+                        recent_tts_age_ms,
+                    )
+                    if tts_echo_segments:
+                        print(
+                            f"\033[94m  [TTS] {tts_echo_segments} segmento(s) de eco "
+                            "del asistente detectado(s)\033[0m"
+                        )
+
+                    segments_to_diarize = [
+                        seg for seg in segments
+                        if seg.get("speaker") != "ASISTENTE"
+                    ]
+                    if tts_echo_segments and not segments_to_diarize:
+                        is_assistant_echo = True
+                    elif patient.voice_embedding and segments_to_diarize:
+                        speaker_verified = True
+                        diarize_segments(
+                            tmp_path, segments_to_diarize, patient.voice_embedding
+                        )
+                    elif patient.voice_embedding and segments:
+                        speaker_verified = True
+                    elif not patient.voice_embedding:
+                        if tts_echo_segments:
+                            for seg in segments_to_diarize:
+                                seg["speaker"] = "PACIENTE?"
+                                seg["speaker_similarity"] = None
+                                seg["speaker_confidence"] = "unverified"
+                        else:
+                            print("\033[93m  [!] Sin muestra de voz - no se identifica hablante\033[0m")
+
+                    if tts_echo_segments or speaker_verified:
+                        has_patient_like_speaker = any(
+                            seg.get("speaker") in {"PACIENTE", "PACIENTE?"}
+                            for seg in segments
+                        )
+                        transcript_text = build_tagged_transcript(segments)
+                        print(f"\033[96m  [TAG] TRANSCRIPCION ETIQUETADA:\033[0m")
+                        for line in transcript_text.split("\n"):
+                            print(f"     {line}")
                 t_diar_end = time.time()
                 print(f"\033[96m  >> DIARIZACION:    {t_diar_end - t_diar_start:.2f}s\033[0m")
 
@@ -259,7 +310,7 @@ async def process_audio_chunk(
                 if is_assistant_echo:
                     db.commit()
                     stored_msg = "transcript guardado" if not duplicate_assistant_echo else "duplicado omitido"
-                    print(f"\033[92m  [OK] ECO ASSISTANT: {stored_msg}, sin alerta\033[0m")
+                    print(f"\033[92m  [OK] ECO ASISTENTE: {stored_msg}, sin alerta\033[0m")
                     print(f"\033[96m  >> TOTAL:          {time.time() - t0:.2f}s\033[0m")
                     print(f"\033[96m{'='*60}\033[0m\n")
                     return AudioChunkResponse(
@@ -357,6 +408,15 @@ async def process_audio_chunk(
                     db.add(alert)
                     db.flush()
                     alert_id = alert.id
+                    if user.caregiver_id:
+                        background_tasks.add_task(
+                            notify_caregiver_alert,
+                            caregiver_id=user.caregiver_id,
+                            alert_id=alert_id,
+                            patient_name=user.full_name,
+                            severity=result.severity,
+                            reason=result.reason,
+                        )
 
                     # Audio replay is useful but not required for the alert.
                     try:

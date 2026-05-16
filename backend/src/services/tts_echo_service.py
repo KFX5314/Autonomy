@@ -10,7 +10,7 @@ import unicodedata
 from ..config import config
 
 
-_TAG_RE = re.compile(r"\[(?:PACIENTE\?|PACIENTE|OTRO|ASSISTANT)\]\s*", re.IGNORECASE)
+_TAG_RE = re.compile(r"\[(?:PACIENTE\?|PACIENTE|OTRO|ASISTENTE)\]\s*", re.IGNORECASE)
 _SPACE_RE = re.compile(r"\s+")
 
 
@@ -68,4 +68,4 @@ def detect_tts_echo(
 def tag_as_assistant(transcript_text: str) -> str:
     text = _TAG_RE.sub(" ", transcript_text or "")
     text = _SPACE_RE.sub(" ", text).strip()
-    return f"[ASSISTANT] {text}" if text else "[ASSISTANT]"
+    return f"[ASISTENTE] {text}" if text else "[ASISTENTE]"

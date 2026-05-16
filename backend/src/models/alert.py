@@ -8,7 +8,7 @@ class Alert(Base):
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     patient_id = Column(BigInteger, ForeignKey("patients.id"), nullable=False)
-    transcript_id = Column(BigInteger, ForeignKey("transcripts.id"), nullable=True)
+    transcript_id = Column(BigInteger, ForeignKey("transcripts.id", ondelete="SET NULL"), nullable=True)
     severity = Column(SmallInteger, nullable=False)
     reason = Column(String(512), nullable=False)
     llm_response = Column(Text, nullable=True)

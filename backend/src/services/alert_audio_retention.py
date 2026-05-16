@@ -50,38 +50,53 @@ def enforce_patient_audio_cap(db: Session, patient_id: int) -> int:
     return cleaned
 
 
-def sweep_expired_alert_audio() -> None:
-    """Startup sweep: remove expired alert audio and enforce per-patient caps."""
-    db = SessionLocal()
-    try:
-        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
-            days=config.ALERT_AUDIO_MAX_DAYS
-        )
-        expired = (
-            db.query(Alert)
-            .filter(Alert.audio_path.isnot(None))
-            .filter(Alert.created_at < cutoff)
-            .all()
-        )
-        for alert in expired:
-            delete_alert_audio(alert, reason="age sweep")
+def cleanup_alert_audio_retention(
+    db: Session,
+    patient_ids: list[int] | None = None,
+    now: datetime | None = None,
+) -> int:
+    """Remove expired archived alert audio and enforce per-patient caps."""
+    now = now or datetime.now(timezone.utc)
+    cutoff = now.replace(tzinfo=None) - timedelta(days=config.ALERT_AUDIO_MAX_DAYS)
+    query = (
+        db.query(Alert)
+        .filter(Alert.audio_path.isnot(None))
+        .filter(Alert.created_at < cutoff)
+    )
+    if patient_ids is not None:
+        if not patient_ids:
+            return 0
+        query = query.filter(Alert.patient_id.in_(patient_ids))
 
-        patient_ids = [
+    expired = query.all()
+    cleaned = 0
+    for alert in expired:
+        if delete_alert_audio(alert, reason="age sweep"):
+            cleaned += 1
+
+    if patient_ids is None:
+        cap_patient_ids = [
             row[0]
             for row in db.query(Alert.patient_id)
             .filter(Alert.audio_path.isnot(None))
             .distinct()
             .all()
         ]
-        cap_cleaned = sum(enforce_patient_audio_cap(db, patient_id) for patient_id in patient_ids)
+    else:
+        cap_patient_ids = patient_ids
 
+    cleaned += sum(enforce_patient_audio_cap(db, patient_id) for patient_id in cap_patient_ids)
+    return cleaned
+
+
+def sweep_expired_alert_audio() -> None:
+    """Startup sweep: remove expired alert audio and enforce per-patient caps."""
+    db = SessionLocal()
+    try:
+        cleaned = cleanup_alert_audio_retention(db)
         db.commit()
-        if expired or cap_cleaned:
-            logger.info(
-                "Alert-audio sweep cleaned %s expired files and %s files over cap",
-                len(expired),
-                cap_cleaned,
-            )
+        if cleaned:
+            logger.info("Alert-audio sweep cleaned %s files", cleaned)
     except Exception as e:
         logger.warning(f"Alert-audio sweep failed: {e}")
         db.rollback()

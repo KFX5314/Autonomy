@@ -56,6 +56,22 @@ CREATE TABLE IF NOT EXISTS patient_context (
 );
 
 -- ============================================================
+-- PUSH_TOKENS: Expo push tokens for caregiver devices.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS push_tokens (
+    id              BIGINT          PRIMARY KEY AUTO_INCREMENT,
+    user_id         BIGINT          NOT NULL,
+    token           VARCHAR(255)    NOT NULL UNIQUE,
+    platform        VARCHAR(32)     NULL,
+    device_id       VARCHAR(128)    NULL,
+    created_at      TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP       DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_push_user FOREIGN KEY (user_id) REFERENCES users(id)
+        ON DELETE CASCADE,
+    INDEX idx_push_user (user_id)
+);
+
+-- ============================================================
 -- TRANSCRIPTS: Stored transcription results from audio chunks.
 -- audio is NOT stored by default (privacy by design).
 -- ============================================================

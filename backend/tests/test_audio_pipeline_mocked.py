@@ -44,12 +44,18 @@ def test_audio_chunk_creates_alert_with_mocked_models(
     register_caregiver(client)
     patient = register_patient(client, username="audio_patient")
     _enroll_test_voice_sample(db_session, "audio_patient")
+    sent_push = []
 
     alert_audio_dir = Path(".pytest_runtime") / "alert_audio" / uuid4().hex
     alert_audio_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(audio_route.config, "ALERTS_AUDIO_DIR", str(alert_audio_dir))
     monkeypatch.setattr(audio_route, "should_schedule_journal", lambda *args, **kwargs: False)
     monkeypatch.setattr(audio_route, "enforce_patient_audio_cap", lambda db, patient_id: None)
+    monkeypatch.setattr(
+        audio_route,
+        "notify_caregiver_alert",
+        lambda **kwargs: sent_push.append(kwargs),
+    )
     monkeypatch.setattr(
         audio_route.subprocess,
         "run",
@@ -106,6 +112,15 @@ def test_audio_chunk_creates_alert_with_mocked_models(
     alert = db_session.query(Alert).one()
     assert alert.reason == 'Palabra de emergencia detectada: "ayuda"'
     assert alert.audio_path is not None
+    assert sent_push == [
+        {
+            "caregiver_id": 1,
+            "alert_id": alert.id,
+            "patient_name": "Paciente Test",
+            "severity": 5,
+            "reason": 'Palabra de emergencia detectada: "ayuda"',
+        }
+    ]
 
 
 def test_audio_chunk_rejects_invalid_mime(client, register_caregiver, register_patient):
@@ -185,4 +200,99 @@ def test_audio_chunk_with_only_other_speaker_skips_detector_and_llm(
     assert body["segments"][0]["speaker"] == "OTRO"
 
     assert db_session.query(Transcript).count() == 1
+    assert db_session.query(Alert).count() == 0
+
+
+def test_audio_chunk_tags_partial_tts_echo_as_assistant_before_diarization(
+    client,
+    db_session,
+    monkeypatch,
+    register_caregiver,
+    register_patient,
+):
+    register_caregiver(client)
+    patient = register_patient(client, username="partial_tts_patient")
+    _enroll_test_voice_sample(db_session, "partial_tts_patient")
+
+    monkeypatch.setattr(
+        audio_route.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="13.0"),
+    )
+    monkeypatch.setattr(
+        audio_route,
+        "transcribe_audio",
+        lambda path, audio_duration=None: {
+            "text": "Si, tienes alergia a los cacahuetes. Vale, muchas gracias asistente.",
+            "language": "es",
+            "segments": [
+                {
+                    "start": 3.0,
+                    "end": 6.0,
+                    "text": "Si, tienes alergia a los cacahuetes.",
+                },
+                {
+                    "start": 6.0,
+                    "end": 10.9,
+                    "text": "Vale, muchas gracias asistente.",
+                },
+            ],
+        },
+    )
+
+    diarized_texts = []
+
+    def fake_diarize(audio_path, segments, patient_embedding):
+        diarized_texts.extend(seg["text"] for seg in segments)
+        assert len(segments) == 1
+        segments[0].update({
+            "speaker": "PACIENTE?",
+            "speaker_similarity": 0.37,
+            "speaker_threshold": 0.40,
+            "speaker_uncertain_threshold": 0.30,
+            "speaker_confidence": "uncertain",
+        })
+        return segments
+
+    class NoEpisodeDetector:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def analyze(self, *args, **kwargs):
+            return SimpleNamespace(
+                is_episode=False,
+                severity=0,
+                reason="mock",
+                llm_response=None,
+            )
+
+    monkeypatch.setattr(audio_route, "diarize_segments", fake_diarize)
+    monkeypatch.setattr(audio_route, "EpisodeDetector", NoEpisodeDetector)
+    monkeypatch.setattr(audio_route, "should_schedule_journal", lambda *args, **kwargs: False)
+
+    response = client.post(
+        "/audio/chunk",
+        headers=auth_headers(patient["access_token"]),
+        data={
+            "recent_tts_text": "Si, tienes alergia a los cacahuetes.",
+            "recent_tts_age_ms": "9000",
+        },
+        files={"file": ("chunk.wav", b"fake audio", "audio/wav")},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["episode"] is False
+    assert body["mode"] == "idle"
+    assert body["transcript"] == (
+        "[ASISTENTE] Si, tienes alergia a los cacahuetes.\n"
+        "[PACIENTE?] Vale, muchas gracias asistente."
+    )
+    assert body["segments"][0]["speaker"] == "ASISTENTE"
+    assert body["segments"][0]["speaker_confidence"] == "tts_echo"
+    assert body["segments"][1]["speaker"] == "PACIENTE?"
+    assert diarized_texts == ["Vale, muchas gracias asistente."]
+
+    stored = db_session.query(Transcript).one()
+    assert stored.transcript_text == body["transcript"]
     assert db_session.query(Alert).count() == 0

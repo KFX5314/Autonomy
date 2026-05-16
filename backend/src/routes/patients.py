@@ -6,7 +6,7 @@ import os
 import tempfile
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 
 from ..config import config
@@ -19,6 +19,8 @@ from ..schemas.patient import PatientOut, PatientContextUpdate, PatientContextOu
 from ..schemas.journal import JournalEntryOut
 from ..auth import require_caregiver, require_patient
 from ..services.memory_service import get_short_term
+from ..services.expo_push_service import notify_caregiver_alert
+from ..services.retention_service import cleanup_patient_retention_safely
 from ..services.speaker_id_service import (
     MAX_VOICE_SAMPLES,
     append_voice_sample,
@@ -66,6 +68,7 @@ def list_patients(db: Session = Depends(get_db), user: User = Depends(require_ca
 
 @router.post("/me/logout-warning")
 def create_logout_warning(
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user: User = Depends(require_patient),
 ):
@@ -84,6 +87,15 @@ def create_logout_warning(
     db.add(alert)
     db.commit()
     db.refresh(alert)
+    if user.caregiver_id:
+        background_tasks.add_task(
+            notify_caregiver_alert,
+            caregiver_id=user.caregiver_id,
+            alert_id=alert.id,
+            patient_name=user.full_name,
+            severity=alert.severity,
+            reason=alert.reason,
+        )
     return {"status": "ok", "alert_id": alert.id}
 
 
@@ -222,6 +234,7 @@ def get_short_term_memory(
 ):
     """Caregiver-only: read the patient's current short-term memory window."""
     _get_owned_patient(patient_id, db, user)
+    cleanup_patient_retention_safely(db, patient_id)
 
     generated_at = datetime.now(timezone.utc)
     return ShortTermMemoryOut(
@@ -243,6 +256,7 @@ def get_journal(
 ):
     """Caregiver-only: read the patient's recent journal entries (LTM)."""
     _get_owned_patient(patient_id, db, user)
+    cleanup_patient_retention_safely(db, patient_id)
 
     since_hours = max(1, min(since_hours, 168))  # 1 h .. 1 week
     limit = max(1, min(limit, 500))

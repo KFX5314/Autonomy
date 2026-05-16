@@ -13,7 +13,7 @@
       "adaptiveIcon": {
         "backgroundColor": "#4A90D9"
       },
-      "permissions": ["RECORD_AUDIO", "FOREGROUND_SERVICE"]
+      "permissions": ["RECORD_AUDIO", "FOREGROUND_SERVICE", "POST_NOTIFICATIONS"]
     },
     "plugins": [
       [
@@ -21,7 +21,8 @@
         {
           "microphonePermission": "Esta app necesita acceso al micrófono para escuchar y asistir al paciente."
         }
-      ]
+      ],
+      "expo-notifications"
     ]
   }
 }

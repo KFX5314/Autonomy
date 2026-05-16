@@ -80,9 +80,10 @@ flowchart LR
 - Detección de episodios mediante frases de alerta, expresiones regulares, contexto del paciente y LLM.
 - Asistente por palabras de activación configurables, sin crear alerta.
 - Respuesta por voz al paciente con `expo-speech`.
-- Registro de muestra de voz, diarización paciente/no paciente, etiqueta dudosa `[PACIENTE?]` y etiquetado `[ASSISTANT]` para eco TTS.
-- Gestión de alertas con transcripción, refresco automático, audio archivado y ACK del cuidador.
-- Diario de memoria a largo plazo y vista avanzada de memoria a corto plazo para el cuidador.
+- Registro de muestra de voz, diarización paciente/no paciente, etiqueta dudosa `[PACIENTE?]` y etiquetado `[ASISTENTE]` para eco TTS.
+- Gestión de alertas con transcripción, refresco automático, audio archivado, ACK del cuidador y notificaciones push Expo al responsable.
+- Diario de memoria a largo plazo y vista avanzada de memoria a corto plazo para el cuidador, con refresco silencioso cada segundo en "En directo".
+- Limpieza oportunista de diario, transcripciones y audio archivado al consultar vistas del responsable.
 - Endurecimiento básico de seguridad: JWT, roles, límite de request, retención de audio y checks de producción.
 
 ## Requisitos previos
@@ -182,7 +183,7 @@ Primero genera el `.env` del frontend con la IP adecuada:
 .\scripts\update-frontend-env.ps1
 ```
 
-El frontend lee su configuración desde `frontend/app/.env` usando variables `EXPO_PUBLIC_*`. Además de la URL del backend, `frontend/app/.env.example` documenta los timeouts de subida de audio, umbrales VAD/chunking, parámetros TTS y duración de la muestra de voz. El script actualiza `EXPO_PUBLIC_SERVER_URL` y conserva el resto de valores si ya existen.
+El frontend lee su configuración desde `frontend/app/.env` usando variables `EXPO_PUBLIC_*`. Además de la URL del backend, `frontend/app/.env.example` documenta los timeouts de subida de audio, refrescos del responsable, umbrales VAD/chunking, parámetros TTS y duración de la muestra de voz. El script actualiza `EXPO_PUBLIC_SERVER_URL` y conserva el resto de valores si ya existen.
 
 Después lanza Expo:
 
@@ -376,7 +377,7 @@ TFG-DEMENCIA/
 | `SPEAKER_UNCERTAIN_THRESHOLD` | `0.30` | Umbral inferior para etiquetar `[PACIENTE?]` |
 | `SPEAKER_SAMPLE_CONSISTENCY_THRESHOLD` | `0.40` | Umbral para aceptar una nueva muestra de voz como activa |
 | `TTS_ECHO_MATCH_WINDOW_MS` | `30000` | Ventana para reconocer eco TTS reciente |
-| `TTS_ECHO_MATCH_RATIO` | `0.82` | Similitud mínima para etiquetar `[ASSISTANT]` |
+| `TTS_ECHO_MATCH_RATIO` | `0.82` | Similitud mínima para etiquetar `[ASISTENTE]` |
 | `TTS_ECHO_MIN_CHARS` | `12` | Longitud mínima para comparar eco TTS |
 | `LLM_PROVIDER` | `ollama` | `ollama` u `openai` |
 | `LLM_MODEL` | `mistral:7b-instruct` | Modelo LLM |
@@ -384,6 +385,8 @@ TFG-DEMENCIA/
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | URL de Ollama |
 | `OPENAI_API_KEY` | vacío | API key si `LLM_PROVIDER=openai` |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Endpoint compatible OpenAI |
+| `EXPO_PUSH_URL` | `https://exp.host/--/api/v2/push/send` | Endpoint Expo Push usado para avisar al responsable |
+| `EXPO_PUSH_TIMEOUT_SECONDS` | `5` | Timeout del envio push; los fallos no bloquean la alerta |
 | `STM_WINDOW_MINUTES` | `5` | Ventana de memoria a corto plazo |
 | `STM_MAX_UTTERANCES` | `12` | Máximo de frases en STM |
 | `STM_MAX_CHARS` | `1500` | Límite de caracteres en STM |
@@ -456,6 +459,8 @@ La documentación interactiva completa está disponible en `/docs` cuando el bac
 | `POST` | `/patients/{id}/voice-sample` | Cuidador | Subir muestra de voz |
 | `GET` | `/patients/{id}/journal` | Cuidador | Consultar diario |
 | `GET` | `/patients/{id}/short-term-memory` | Cuidador | Consultar memoria a corto plazo |
+| `POST` | `/push-tokens/` | Cuidador | Registrar token Expo del dispositivo responsable |
+| `DELETE` | `/push-tokens/` | Cuidador | Eliminar token Expo del dispositivo responsable |
 | `POST` | `/audio/chunk` | Paciente | Subir chunk de audio |
 | `GET` | `/alerts/` | Cuidador | Listar alertas |
 | `GET` | `/alerts/{id}/audio` | Cuidador | Reproducir audio archivado |
@@ -494,7 +499,7 @@ En autenticación, el responsable se registra e inicia sesión con email. El pac
 ### ¿Por qué SpeechBrain para diarización?
 
 - Las muestras de voz permiten crear embeddings locales del paciente.
-- Cada segmento se compara contra la muestra activa con mayor similitud para etiquetar `[PACIENTE]`, `[PACIENTE?]` u `[OTRO]`; si coincide con una respuesta TTS reciente de la app, se etiqueta `[ASSISTANT]`.
+- Cada segmento se compara contra la muestra activa con mayor similitud para etiquetar `[PACIENTE]`, `[PACIENTE?]` u `[OTRO]`; si coincide con una respuesta TTS reciente de la app, se etiqueta `[ASISTENTE]`.
 - Las muestras nuevas solo quedan activas si son consistentes con las muestras ya aceptadas; si no, quedan en revision para que el cuidador las borre o regrabe.
 - `[PACIENTE?]` indica identificación dudosa: no dispara reglas deterministas, pero el LLM la recibe como contexto con cautela.
 - Las reglas se aplican sobre texto `[PACIENTE]` cuando hay diarización disponible, reduciendo falsas alertas por frases dichas por otra persona.
