@@ -2,6 +2,30 @@
 $ErrorActionPreference = "Stop"
 Set-Location "$PSScriptRoot\.."
 
+function Import-DotEnvFile {
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        return
+    }
+
+    foreach ($rawLine in Get-Content -Path $Path) {
+        $line = $rawLine.Trim()
+        if (-not $line -or $line.StartsWith("#") -or -not $line.Contains("=")) {
+            continue
+        }
+
+        $parts = $line.Split("=", 2)
+        $key = $parts[0].Trim()
+        if ($key -notmatch "^[A-Za-z_][A-Za-z0-9_]*$") {
+            continue
+        }
+
+        $value = $parts[1].Trim().Trim('"').Trim("'")
+        [Environment]::SetEnvironmentVariable($key, $value, "Process")
+    }
+}
+
 function Get-OllamaTags {
     param([string]$TagsUrl)
 
@@ -27,6 +51,16 @@ function Start-OllamaServer {
         exit 1
     }
 }
+
+# Load project configuration before checking external services. The local
+# launcher treats .env files as the source of truth so stale PowerShell session
+# variables do not silently override the model being tested.
+Import-DotEnvFile ".env"
+Import-DotEnvFile "backend\.env"
+
+Write-Host "`n=== Loaded local config ===" -ForegroundColor Cyan
+Write-Host "  LLM_PROVIDER=$($(if ($env:LLM_PROVIDER) { $env:LLM_PROVIDER } else { 'ollama' }))" -ForegroundColor Gray
+Write-Host "  LLM_MODEL=$($(if ($env:LLM_MODEL) { $env:LLM_MODEL } else { 'mistral:7b-instruct' }))" -ForegroundColor Gray
 
 # 1. Kill old uvicorn / python processes on port 8000
 Write-Host "`n=== Cleaning up old processes ===" -ForegroundColor Cyan
@@ -68,52 +102,57 @@ if ($mariaService.Status -ne "Running") {
     Write-Host "  MariaDB is running." -ForegroundColor Green
 }
 
-# 3. Ensure Ollama API is running, not just the ollama.exe process
-Write-Host "`n=== Checking Ollama ===" -ForegroundColor Cyan
-$ollamaUrl = if ($env:OLLAMA_URL) { $env:OLLAMA_URL } else { "http://127.0.0.1:11434" }
-$ollamaBaseUrl = $ollamaUrl.TrimEnd("/")
-$ollamaTagsUrl = "$ollamaBaseUrl/api/tags"
-$ollamaProc = Get-Process -Name "ollama" -ErrorAction SilentlyContinue
+# 3. Ensure Ollama API is running when the configured provider needs it
+$llmProvider = if ($env:LLM_PROVIDER) { $env:LLM_PROVIDER } else { "ollama" }
+if ($llmProvider -eq "ollama") {
+    Write-Host "`n=== Checking Ollama ===" -ForegroundColor Cyan
+    $ollamaUrl = if ($env:OLLAMA_URL) { $env:OLLAMA_URL } else { "http://127.0.0.1:11434" }
+    $ollamaBaseUrl = $ollamaUrl.TrimEnd("/")
+    $ollamaTagsUrl = "$ollamaBaseUrl/api/tags"
+    $ollamaProc = Get-Process -Name "ollama" -ErrorAction SilentlyContinue
 
-if ($ollamaProc) {
-    Write-Host "  Ollama process found. Verifying API at $ollamaBaseUrl..." -ForegroundColor Gray
-} else {
-    Write-Host "  Ollama process not found." -ForegroundColor Yellow
-}
-
-$ollamaTags = Get-OllamaTags -TagsUrl $ollamaTagsUrl
-if (-not $ollamaTags) {
-    Write-Host "  Ollama API is not responding. Launching server..." -ForegroundColor Yellow
-    Start-OllamaServer
-}
-
-Write-Host "  Waiting for Ollama API..." -ForegroundColor Gray
-for ($i = 0; $i -lt 30; $i++) {
-    $ollamaTags = Get-OllamaTags -TagsUrl $ollamaTagsUrl
-    if ($ollamaTags) {
-        break
+    if ($ollamaProc) {
+        Write-Host "  Ollama process found. Verifying API at $ollamaBaseUrl..." -ForegroundColor Gray
+    } else {
+        Write-Host "  Ollama process not found." -ForegroundColor Yellow
     }
 
-    Start-Sleep -Seconds 1
-}
+    $ollamaTags = Get-OllamaTags -TagsUrl $ollamaTagsUrl
+    if (-not $ollamaTags) {
+        Write-Host "  Ollama API is not responding. Launching server..." -ForegroundColor Yellow
+        Start-OllamaServer
+    }
 
-if ($ollamaTags) {
-    Write-Host "  Ollama API ready." -ForegroundColor Green
-} else {
-    Write-Host "  Ollama API still is not responding at $ollamaBaseUrl." -ForegroundColor Red
-    Write-Host "  Run 'ollama serve' manually to see the underlying error." -ForegroundColor Yellow
-    exit 1
-}
+    Write-Host "  Waiting for Ollama API..." -ForegroundColor Gray
+    for ($i = 0; $i -lt 30; $i++) {
+        $ollamaTags = Get-OllamaTags -TagsUrl $ollamaTagsUrl
+        if ($ollamaTags) {
+            break
+        }
 
-# Verify the configured LLM model is pulled locally
-$llmModel = if ($env:LLM_MODEL) { $env:LLM_MODEL } else { "mistral:7b-instruct" }
-Write-Host "  Checking model '$llmModel'..." -ForegroundColor Gray
-if ($ollamaTags.models.name -contains $llmModel) {
-    Write-Host "  Model '$llmModel' OK" -ForegroundColor Green
+        Start-Sleep -Seconds 1
+    }
+
+    if ($ollamaTags) {
+        Write-Host "  Ollama API ready." -ForegroundColor Green
+    } else {
+        Write-Host "  Ollama API still is not responding at $ollamaBaseUrl." -ForegroundColor Red
+        Write-Host "  Run 'ollama serve' manually to see the underlying error." -ForegroundColor Yellow
+        exit 1
+    }
+
+    # Verify the configured LLM model is pulled locally
+    $llmModel = if ($env:LLM_MODEL) { $env:LLM_MODEL } else { "mistral:7b-instruct" }
+    Write-Host "  Checking model '$llmModel'..." -ForegroundColor Gray
+    if ($ollamaTags.models.name -contains $llmModel) {
+        Write-Host "  Model '$llmModel' OK" -ForegroundColor Green
+    } else {
+        Write-Host "  Model '$llmModel' not found locally. Pull it with:" -ForegroundColor Red
+        Write-Host "    ollama pull $llmModel" -ForegroundColor Yellow
+        exit 1
+    }
 } else {
-    Write-Host "  Model '$llmModel' not found locally. Pull it with:" -ForegroundColor Red
-    Write-Host "    ollama pull $llmModel" -ForegroundColor Yellow
-    exit 1
+    Write-Host "`n=== Skipping Ollama check (LLM_PROVIDER=$llmProvider) ===" -ForegroundColor Cyan
 }
 
 # 4. Activate venv and set environment

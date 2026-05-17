@@ -9,6 +9,30 @@ $appDir = Join-Path $PSScriptRoot "..\frontend\app"
 $frontendEnvPath = Join-Path $appDir ".env"
 $port = 8000
 
+function Import-DotEnvFile {
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        return
+    }
+
+    foreach ($rawLine in Get-Content -Path $Path) {
+        $line = $rawLine.Trim()
+        if (-not $line -or $line.StartsWith("#") -or -not $line.Contains("=")) {
+            continue
+        }
+
+        $parts = $line.Split("=", 2)
+        $key = $parts[0].Trim()
+        if ($key -notmatch "^[A-Za-z_][A-Za-z0-9_]*$") {
+            continue
+        }
+
+        $value = $parts[1].Trim().Trim('"').Trim("'")
+        [Environment]::SetEnvironmentVariable($key, $value, "Process")
+    }
+}
+
 function Get-TailscaleIPv4 {
     if (-not (Get-Command tailscale -ErrorAction SilentlyContinue)) {
         return $null
@@ -127,6 +151,10 @@ if (-not (Test-Path "node_modules")) {
 
 if ($Tunnel) {
     Write-Host "Starting Expo with tunnel mode by request." -ForegroundColor Yellow
+    Import-DotEnvFile $frontendEnvPath
+    if ($env:EXPO_PUBLIC_SERVER_URL) {
+        Write-Host "EXPO_PUBLIC_SERVER_URL=$env:EXPO_PUBLIC_SERVER_URL" -ForegroundColor Green
+    }
     npx expo start --tunnel
     exit $LASTEXITCODE
 }
@@ -142,6 +170,7 @@ if ($ip) {
 
 $serverUrl = "http://$ip`:$port"
 Update-FrontendEnv -ServerUrl $serverUrl
+Import-DotEnvFile $frontendEnvPath
 Write-Host "EXPO_PUBLIC_SERVER_URL=$serverUrl" -ForegroundColor Green
 
 $env:REACT_NATIVE_PACKAGER_HOSTNAME = $ip

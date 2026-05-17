@@ -152,7 +152,7 @@ Opcionalmente, copia `backend/.env.example` a `backend/.env` y ajusta los valore
 Copy-Item backend\.env.example backend\.env
 ```
 
-El backend carga `.env` desde la raíz del proyecto y desde `backend/.env`. Los valores de `.env` pueden sustituir los defaults locales que inyecta `run-backend.ps1`, pero las variables de entorno reales con valores no predeterminados siguen teniendo prioridad.
+Al usar `scripts\run-backend.ps1`, el lanzador carga `.env` desde la raíz del proyecto y después `backend/.env`, dejando `backend/.env` como fuente de verdad para el entorno local. Esto evita que variables antiguas de la sesión de PowerShell sobrescriban por accidente el modelo o proveedor configurado.
 
 ```powershell
 .\scripts\run-backend.ps1
@@ -164,6 +164,7 @@ El script:
 - comprueba que MariaDB esté ejecutándose;
 - arranca Ollama si no está activo;
 - valida que el modelo LLM configurado exista localmente;
+- muestra el `LLM_PROVIDER` y `LLM_MODEL` cargados desde `.env`;
 - activa `.venv`;
 - configura valores de entorno de desarrollo;
 - lanza `uvicorn` en `http://0.0.0.0:8000`.
@@ -182,7 +183,7 @@ Primero genera el `.env` del frontend con la IP adecuada:
 .\scripts\update-frontend-env.ps1
 ```
 
-El frontend lee su configuración desde `frontend/app/.env` usando variables `EXPO_PUBLIC_*`. Además de la URL del backend, `frontend/app/.env.example` documenta los timeouts de subida de audio, refrescos del responsable, umbrales VAD/chunking, parámetros TTS y duración de la muestra de voz. El script actualiza `EXPO_PUBLIC_SERVER_URL` y conserva el resto de valores si ya existen.
+El frontend lee su configuración desde `frontend/app/.env` usando variables `EXPO_PUBLIC_*`. Además de la URL del backend, `frontend/app/.env.example` documenta los timeouts de subida de audio, refrescos del responsable, umbrales VAD/chunking, parámetros TTS y duración de la muestra de voz. El script actualiza `EXPO_PUBLIC_SERVER_URL`, conserva el resto de valores si ya existen y carga ese `.env` en el proceso antes de arrancar Expo, evitando que una variable antigua de PowerShell tenga prioridad.
 
 Después lanza Expo:
 
@@ -196,7 +197,7 @@ El script instala dependencias si faltan. Si detecta una IP activa de Tailscale,
 .\scripts\run-frontend.ps1 -Tunnel
 ```
 
-Si arrancas Expo manualmente y el `.env` conserva una URL `http://100.x.y.z:8000` con Tailscale apagado, la app móvil no podrá llegar al backend aunque el móvil y el PC estén en la misma red. En ese caso ejecuta `.\scripts\update-frontend-env.ps1` para reescribirlo con la IP LAN.
+Si arrancas Expo manualmente y el `.env` conserva una URL `http://100.x.y.z:8000` con Tailscale apagado, la app móvil no podrá llegar al backend aunque el móvil y el PC estén en la misma red. En ese caso ejecuta `.\scripts\update-frontend-env.ps1` para reescribirlo con la IP LAN. Para evitar conflictos con variables `EXPO_PUBLIC_*` antiguas de PowerShell, se recomienda arrancar Expo mediante `.\scripts\run-frontend.ps1`.
 
 ## Scripts disponibles
 
@@ -525,18 +526,27 @@ En autenticacion, el responsable se registra e inicia sesion con email. El pacie
 
 Usar otro modelo local de Ollama:
 
+```env
+# backend/.env
+LLM_PROVIDER=ollama
+LLM_MODEL=openhermes
+```
+
 ```powershell
 ollama pull openhermes
-$env:LLM_MODEL="openhermes"
 .\scripts\run-backend.ps1
 ```
 
 Usar un proveedor compatible con OpenAI:
 
+```env
+# backend/.env
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+LLM_MODEL=gpt-4o-mini
+```
+
 ```powershell
-$env:LLM_PROVIDER="openai"
-$env:OPENAI_API_KEY="sk-..."
-$env:LLM_MODEL="gpt-4o-mini"
 .\scripts\run-backend.ps1
 ```
 
@@ -547,7 +557,7 @@ $env:LLM_MODEL="gpt-4o-mini"
 | `CUDA out of memory` al cargar Whisper | Usa `STT_MODEL=base` o `STT_MODEL=small`, o cambia `STT_DEVICE=cpu` |
 | La app no conecta con el backend | Desde el móvil no uses `localhost`; usa IP LAN o Tailscale del PC |
 | Ollama no responde | Comprueba `ollama list` y que `ollama serve` esté activo |
-| El modelo LLM no existe | Ejecuta `ollama pull mistral:7b-instruct` o cambia `LLM_MODEL` |
+| El modelo LLM no existe | Ejecuta `ollama pull <modelo configurado en LLM_MODEL>` o cambia `LLM_MODEL` a un modelo descargado |
 | MariaDB connection error | Comprueba servicio MariaDB, puerto 3306 y credenciales |
 | Audio demasiado largo | Reduce `EXPO_PUBLIC_VAD_MAX_CHUNK_MS` en frontend o revisa el VAD local |
 | No aparece diarización | Graba una nueva muestra de voz desde la pantalla del cuidador |
