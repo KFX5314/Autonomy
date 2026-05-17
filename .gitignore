@@ -2,6 +2,8 @@
 __pycache__/
 *.py[cod]
 *.pyo
+.pytest_tmp/
+.pytest_runtime/
 backend/.pytest_runtime/
 
 # Virtual env
