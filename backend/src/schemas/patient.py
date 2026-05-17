@@ -19,6 +19,10 @@ class PatientCreate(BaseModel):
     password: str
 
 
+class PatientUpdate(BaseModel):
+    username: str
+
+
 class PatientContextUpdate(BaseModel):
     context_json: dict
 

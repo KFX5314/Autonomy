@@ -95,6 +95,13 @@ export async function createPatientForCaregiver({ fullName, username, password }
   });
 }
 
+export async function updatePatient(patientId, { username }) {
+  return request(`/patients/${patientId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ username }),
+  });
+}
+
 export async function deletePatient(patientId) {
   return request(`/patients/${patientId}`, {
     method: "DELETE",

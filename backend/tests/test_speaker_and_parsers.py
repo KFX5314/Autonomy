@@ -83,12 +83,12 @@ def test_plain_embedding_list_is_ignored():
     assert _active_voice_sample_vectors(embedding) == []
 
 
-def test_load_wav_falls_back_to_soundfile_when_torchaudio_codec_is_missing(tmp_path, monkeypatch):
+def test_load_wav_prefers_soundfile_over_torchaudio_codec_path(tmp_path, monkeypatch):
     audio_path = tmp_path / "sample.wav"
     sf.write(audio_path, np.zeros(SAMPLE_RATE, dtype=np.float32), SAMPLE_RATE)
 
     def fail_load(_path):
-        raise ImportError("TorchCodec is required for load_with_torchcodec")
+        raise AssertionError("torchaudio.load should not be used for normal WAV loading")
 
     monkeypatch.setattr(speaker_id_service.torchaudio, "load", fail_load)
 

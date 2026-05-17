@@ -121,14 +121,14 @@ def _load_wav(audio_path: str) -> torch.Tensor:
     converted = _to_wav(audio_path)
     try:
         try:
-            signal, sr = torchaudio.load(converted)
-        except (ImportError, RuntimeError, OSError) as exc:
+            signal, sr = _load_wav_with_soundfile(converted)
+        except (RuntimeError, OSError) as exc:
             logger.warning(
-                "torchaudio.load failed for %s; falling back to soundfile: %s",
+                "soundfile failed for %s; falling back to torchaudio.load: %s",
                 converted,
                 exc,
             )
-            signal, sr = _load_wav_with_soundfile(converted)
+            signal, sr = torchaudio.load(converted)
         if signal.shape[0] > 1:
             signal = signal.mean(dim=0, keepdim=True)
         if sr != SAMPLE_RATE:

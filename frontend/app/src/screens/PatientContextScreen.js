@@ -17,6 +17,7 @@ import {
   deleteVoiceSample,
   getPatientContext,
   getVoiceSamples,
+  updatePatient,
   updatePatientContext,
   uploadVoiceSample,
 } from "../services/api";
@@ -32,6 +33,7 @@ export default function PatientContextScreen({ patient, onBack }) {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
+  const [patientUsername, setPatientUsername] = useState(patient?.username || "");
   const [preferredName, setPreferredName] = useState("");
   const [address, setAddress] = useState("");
   const [caregiverNames, setCaregiverNames] = useState("");
@@ -193,6 +195,14 @@ export default function PatientContextScreen({ patient, onBack }) {
     setSaving(true);
 
     try {
+      const cleanUsername = patientUsername.trim().toLowerCase();
+      if (!cleanUsername) {
+        Alert.alert("Error", "El nombre de usuario del paciente es obligatorio");
+        savingRef.current = false;
+        setSaving(false);
+        return;
+      }
+
       const cleanedPhrases = alertPhrases
         .map((p) => ({
           text: (p.text || "").trim(),
@@ -219,6 +229,9 @@ export default function PatientContextScreen({ patient, onBack }) {
         alert_phrases: cleanedPhrases,
         assistant_wake_words: cleanedWakeWords,
       };
+      if (cleanUsername !== (patient.username || "")) {
+        await updatePatient(patient.id, { username: cleanUsername });
+      }
       await updatePatientContext(patient.id, newContext);
       Alert.alert("Guardado", "Contexto actualizado correctamente.", [
         { text: "OK", onPress: () => onBack?.() },
@@ -272,6 +285,18 @@ export default function PatientContextScreen({ patient, onBack }) {
       </Pressable>
 
       <Text style={styles.title}>Configuración de {patient.full_name}</Text>
+
+      <Text style={styles.label}>Nombre de usuario</Text>
+      <Text style={styles.hint}>
+        Lo usa el paciente para iniciar sesión.
+      </Text>
+      <TextInput
+        style={styles.input}
+        value={patientUsername}
+        onChangeText={setPatientUsername}
+        autoCapitalize="none"
+        autoCorrect={false}
+      />
 
       <Text style={styles.label}>Nombre preferido</Text>
       <TextInput style={styles.input} value={preferredName} onChangeText={setPreferredName} />

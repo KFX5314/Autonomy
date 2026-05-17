@@ -436,13 +436,7 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext, onO
       </View>
       {patients.length === 0 && loaded ? (
         <View style={styles.emptyPatientsBox}>
-          <Text style={styles.empty}>No hay pacientes vinculados aun.</Text>
-          <Pressable
-            style={({ pressed }) => [styles.emptyAddBtn, pressed && styles.addPatientBtnPressed]}
-            onPress={openAddPatient}
-          >
-            <Text style={styles.emptyAddText}>Añadir paciente</Text>
-          </Pressable>
+          <Text style={styles.empty}>No hay pacientes añadidos</Text>
         </View>
       ) : (
         <FlatList
@@ -454,7 +448,9 @@ export default function CaregiverHomeScreen({ user, onLogout, onEditContext, onO
           renderItem={({ item }) => (
             <View style={[styles.patientCard, { borderLeftColor: item.ui_color || "#4A90D9" }]}>
               <Text style={styles.patientName}>{item.full_name}</Text>
-              {item.username ? <Text style={styles.patientUsername}>@{item.username}</Text> : null}
+              {item.username ? (
+                <Text style={styles.patientUsername}>Nombre de usuario: {item.username}</Text>
+              ) : null}
               <View style={styles.patientActions}>
                 <PatientActionButton
                   icon="⚙"

@@ -236,6 +236,75 @@ def test_caregiver_create_patient_rejects_duplicate_username(
     assert response.json()["detail"] == "Username already registered"
 
 
+def test_caregiver_can_update_owned_patient_username(client, register_caregiver):
+    caregiver = register_caregiver(client, email="rename-care@example.com")
+    created = client.post(
+        "/patients/",
+        headers=auth_headers(caregiver["access_token"]),
+        json={
+            "full_name": "Paciente Renombrable",
+            "username": "usuario_antiguo",
+            "password": "secret123",
+        },
+    )
+    assert created.status_code == 200, created.text
+
+    response = client.patch(
+        f"/patients/{created.json()['id']}",
+        headers=auth_headers(caregiver["access_token"]),
+        json={"username": "usuario_nuevo"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["username"] == "usuario_nuevo"
+
+    old_login = client.post(
+        "/auth/login",
+        json={"identifier": "usuario_antiguo", "password": "secret123", "role": "patient"},
+    )
+    new_login = client.post(
+        "/auth/login",
+        json={"identifier": "usuario_nuevo", "password": "secret123", "role": "patient"},
+    )
+    assert old_login.status_code == 401
+    assert new_login.status_code == 200
+
+
+def test_update_patient_username_rejects_duplicates_and_wrong_owner(
+    client,
+    register_caregiver,
+):
+    owner = register_caregiver(client, email="rename-owner@example.com")
+    other = register_caregiver(client, email="rename-other@example.com")
+    first = client.post(
+        "/patients/",
+        headers=auth_headers(owner["access_token"]),
+        json={"full_name": "Paciente Uno", "username": "paciente_uno", "password": "secret123"},
+    )
+    second = client.post(
+        "/patients/",
+        headers=auth_headers(owner["access_token"]),
+        json={"full_name": "Paciente Dos", "username": "paciente_dos", "password": "secret123"},
+    )
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+
+    duplicate = client.patch(
+        f"/patients/{first.json()['id']}",
+        headers=auth_headers(owner["access_token"]),
+        json={"username": "paciente_dos"},
+    )
+    forbidden = client.patch(
+        f"/patients/{first.json()['id']}",
+        headers=auth_headers(other["access_token"]),
+        json={"username": "otro_nombre"},
+    )
+
+    assert duplicate.status_code == 400
+    assert duplicate.json()["detail"] == "Username already registered"
+    assert forbidden.status_code == 403
+
+
 def test_patient_cannot_access_caregiver_routes(client, register_caregiver, register_patient):
     register_caregiver(client)
     patient = register_patient(client)

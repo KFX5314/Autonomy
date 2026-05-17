@@ -15,10 +15,10 @@ from ..models.user import User
 from ..models.patient import Patient, PatientContext
 from ..models.journal import JournalEntry
 from ..models.alert import Alert
-from ..schemas.patient import PatientCreate, PatientOut, PatientContextUpdate, PatientContextOut, ShortTermMemoryOut
+from ..schemas.patient import PatientCreate, PatientUpdate, PatientOut, PatientContextUpdate, PatientContextOut, ShortTermMemoryOut
 from ..schemas.journal import JournalEntryOut
 from ..auth import require_caregiver, require_patient
-from ..services.patient_account_service import create_patient_account
+from ..services.patient_account_service import create_patient_account, normalize_username, validate_patient_username
 from ..services.memory_service import get_short_term
 from ..services.expo_push_service import notify_caregiver_alert
 from ..services.alert_audio_retention import delete_alert_audio
@@ -102,6 +102,32 @@ def delete_patient(
     db.delete(patient_user)
     db.commit()
     return {"status": "deleted", "patient_id": patient_id, "user_id": deleted_user_id}
+
+
+@router.patch("/{patient_id}", response_model=PatientOut)
+def update_patient(
+    patient_id: int,
+    body: PatientUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_caregiver),
+):
+    """Update basic account data for one owned patient."""
+    patient = _get_owned_patient(patient_id, db, user)
+    patient_user = db.query(User).filter(User.id == patient.user_id).first()
+    if not patient_user:
+        raise HTTPException(status_code=404, detail="Patient user not found")
+
+    clean_username = validate_patient_username(normalize_username(body.username))
+    if clean_username != patient_user.username:
+        existing = db.query(User).filter(User.username == clean_username, User.id != patient_user.id).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Username already registered")
+        patient_user.username = clean_username
+
+    db.commit()
+    db.refresh(patient_user)
+    db.refresh(patient)
+    return _patient_out(patient, patient_user)
 
 
 @router.get("/", response_model=list[PatientOut])
