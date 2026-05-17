@@ -1,15 +1,21 @@
 import math
 
+import numpy as np
+import soundfile as sf
+
 from src.services.episode_detector import _extract_patient_text, _extract_possible_patient_text
 from src.services.memory_service import _extract_memory_lines
 from src.services.speaker_id_service import (
+    SAMPLE_RATE,
     _active_voice_sample_vectors,
     _best_active_sample_match,
+    _load_wav,
     _speaker_label,
     append_voice_sample,
     delete_voice_sample,
     list_voice_samples,
 )
+from src.services import speaker_id_service
 from src.services.tts_echo_service import normalize_tts_text
 
 
@@ -75,6 +81,21 @@ def test_plain_embedding_list_is_ignored():
 
     assert list_voice_samples(embedding) == []
     assert _active_voice_sample_vectors(embedding) == []
+
+
+def test_load_wav_falls_back_to_soundfile_when_torchaudio_codec_is_missing(tmp_path, monkeypatch):
+    audio_path = tmp_path / "sample.wav"
+    sf.write(audio_path, np.zeros(SAMPLE_RATE, dtype=np.float32), SAMPLE_RATE)
+
+    def fail_load(_path):
+        raise ImportError("TorchCodec is required for load_with_torchcodec")
+
+    monkeypatch.setattr(speaker_id_service.torchaudio, "load", fail_load)
+
+    wav = _load_wav(str(audio_path))
+
+    assert wav.ndim == 1
+    assert wav.shape[0] == SAMPLE_RATE
 
 
 def test_deleting_base_sample_recalculates_remaining_voice_sample_states():

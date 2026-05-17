@@ -100,11 +100,35 @@ def _to_wav(audio_path: str) -> str:
     return wav_path
 
 
+def _load_wav_with_soundfile(audio_path: str) -> tuple[torch.Tensor, int]:
+    """Fallback loader for torchaudio builds that require torchcodec."""
+    try:
+        import soundfile as sf
+    except ImportError as exc:
+        raise RuntimeError(
+            "soundfile is required as an audio loading fallback. "
+            "Install backend requirements again."
+        ) from exc
+
+    data, sr = sf.read(audio_path, dtype="float32", always_2d=True)
+    # soundfile returns (samples, channels); torchaudio returns (channels, samples).
+    signal = torch.from_numpy(data.T.copy())
+    return signal, sr
+
+
 def _load_wav(audio_path: str) -> torch.Tensor:
     """Load audio as a mono float32 tensor at 16 kHz."""
     converted = _to_wav(audio_path)
     try:
-        signal, sr = torchaudio.load(converted)
+        try:
+            signal, sr = torchaudio.load(converted)
+        except (ImportError, RuntimeError, OSError) as exc:
+            logger.warning(
+                "torchaudio.load failed for %s; falling back to soundfile: %s",
+                converted,
+                exc,
+            )
+            signal, sr = _load_wav_with_soundfile(converted)
         if signal.shape[0] > 1:
             signal = signal.mean(dim=0, keepdim=True)
         if sr != SAMPLE_RATE:
