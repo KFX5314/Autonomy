@@ -7,7 +7,7 @@ class Transcript(Base):
     __tablename__ = "transcripts"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    patient_id = Column(BigInteger, ForeignKey("patients.id"), nullable=False)
+    patient_id = Column(BigInteger, ForeignKey("patients.id", ondelete="CASCADE"), nullable=False)
     started_at = Column(DateTime, nullable=False)
     ended_at = Column(DateTime, nullable=False)
     lang = Column(String(8), default="es")
@@ -16,7 +16,7 @@ class Transcript(Base):
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
 
     patient = relationship("Patient", back_populates="transcripts")
-    alert = relationship("Alert", uselist=False, back_populates="transcript")
+    alert = relationship("Alert", uselist=False, back_populates="transcript", passive_deletes=True)
 
     __table_args__ = (
         # Short-term memory queries filter by patient + recent started_at

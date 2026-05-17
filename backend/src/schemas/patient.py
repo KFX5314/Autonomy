@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from datetime import date, datetime
+from datetime import datetime
 
 
 class PatientOut(BaseModel):
@@ -7,8 +7,6 @@ class PatientOut(BaseModel):
     user_id: int
     full_name: str
     username: str | None = None
-    birth_date: date | None = None
-    notes: str | None = None
     created_at: datetime | None = None
 
     class Config:

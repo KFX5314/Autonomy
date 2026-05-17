@@ -1,4 +1,4 @@
-from sqlalchemy import Column, BigInteger, String, Enum, ForeignKey, TIMESTAMP, func
+from sqlalchemy import Column, BigInteger, String, Enum, ForeignKey, TIMESTAMP, CheckConstraint, func
 from sqlalchemy.orm import relationship
 from ..database import Base
 
@@ -12,8 +12,24 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     full_name = Column(String(255), nullable=False)
     role = Column(Enum("caregiver", "patient", name="user_role"), nullable=False)
-    caregiver_id = Column(BigInteger, ForeignKey("users.id"), nullable=True)
+    caregiver_id = Column(BigInteger, ForeignKey("users.id", ondelete="RESTRICT"), nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
 
+    __table_args__ = (
+        CheckConstraint(
+            "("
+            "role = 'caregiver' AND email IS NOT NULL AND username IS NULL AND caregiver_id IS NULL"
+            ") OR ("
+            "role = 'patient' AND email IS NULL AND username IS NOT NULL AND caregiver_id IS NOT NULL"
+            ")",
+            name="ck_users_role_identifier",
+        ),
+    )
+
     caregiver = relationship("User", remote_side=[id], backref="patients_users")
-    patient_profile = relationship("Patient", uselist=False, back_populates="user")
+    patient_profile = relationship(
+        "Patient",
+        uselist=False,
+        back_populates="user",
+        passive_deletes=True,
+    )

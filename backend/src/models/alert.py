@@ -7,7 +7,7 @@ class Alert(Base):
     __tablename__ = "alerts"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    patient_id = Column(BigInteger, ForeignKey("patients.id"), nullable=False)
+    patient_id = Column(BigInteger, ForeignKey("patients.id", ondelete="CASCADE"), nullable=False)
     transcript_id = Column(BigInteger, ForeignKey("transcripts.id", ondelete="SET NULL"), nullable=True)
     severity = Column(SmallInteger, nullable=False)
     reason = Column(String(512), nullable=False)
@@ -21,16 +21,3 @@ class Alert(Base):
 
     patient = relationship("Patient", back_populates="alerts")
     transcript = relationship("Transcript", back_populates="alert")
-    conversation = relationship("ConversationHistory", back_populates="alert")
-
-
-class ConversationHistory(Base):
-    __tablename__ = "conversation_history"
-
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    alert_id = Column(BigInteger, ForeignKey("alerts.id"), nullable=False)
-    role = Column(Enum("patient", "assistant", name="convo_role"), nullable=False)
-    message = Column(Text, nullable=False)
-    created_at = Column(TIMESTAMP, server_default=func.current_timestamp())
-
-    alert = relationship("Alert", back_populates="conversation")

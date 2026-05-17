@@ -11,10 +11,11 @@ import { Audio } from "expo-av";
 import * as Speech from "expo-speech";
 import { useFocusEffect } from "@react-navigation/native";
 import appConfig from "../config/appConfig";
-import { getMyPatientSettings, sendAudioChunk } from "../services/api";
+import { getCurrentUser, getMyPatientSettings, sendAudioChunk } from "../services/api";
 import { loadPatientTtsEnabled } from "../services/session";
 
 const { patientVad, tts } = appConfig;
+const PATIENT_SESSION_CHECK_MS = 15000;
 
 export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
   const [listening, setListening] = useState(false);
@@ -31,9 +32,21 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
   const userId = user?.user_id || user?.id;
   const ttsPlaybackEnabled = caregiverTtsEnabled && localTtsEnabled;
 
+  const checkSessionStillValid = useCallback(async () => {
+    try {
+      await getCurrentUser();
+    } catch (e) {
+      if (e?.status !== 401) {
+        console.warn("Could not verify patient session:", e?.message || e);
+      }
+    }
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       let active = true;
+      checkSessionStillValid();
+      const sessionTimer = setInterval(checkSessionStillValid, PATIENT_SESSION_CHECK_MS);
       (async () => {
         const localEnabled = await loadPatientTtsEnabled(userId);
         if (active) setLocalTtsEnabled(localEnabled);
@@ -46,8 +59,9 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
       })();
       return () => {
         active = false;
+        clearInterval(sessionTimer);
       };
-    }, [userId])
+    }, [checkSessionStillValid, userId])
   );
 
   const startRecording = async () => {
@@ -381,11 +395,14 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
           await discardRecording();
         }
       } else if (listeningRef.current) {
+        checkSessionStillValid();
         console.log("[VAD] App foregrounded — resuming recording");
         const controller = new AbortController();
         abortRef.current = controller;
         setStatus("Escuchando...");
         recordLoop(controller.signal);
+      } else {
+        checkSessionStillValid();
       }
     });
     return () => {
@@ -394,7 +411,7 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
       // Release the recording singleton on unmount (e.g. re-login)
       discardRecording();
     };
-  }, []);
+  }, [checkSessionStillValid]);
 
   return (
     <View style={styles.container}>

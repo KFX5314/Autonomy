@@ -53,62 +53,52 @@ def _enforce_production_safety() -> None:
         raise RuntimeError(msg)
 
 
-def _migrate_alert_audio_columns() -> None:
-    """Add new alert columns on pre-existing DBs. No-op if columns already exist."""
-    from sqlalchemy import inspect, text
+def _verify_database_schema() -> None:
+    """Fail fast when the MariaDB schema was not initialized from init_db.sql."""
+    from sqlalchemy import inspect
+
     insp = inspect(engine)
     try:
-        cols = {c["name"] for c in insp.get_columns("alerts")}
-    except Exception:
-        return
-    stmts: list[str] = []
-    if "audio_path" not in cols:
-        stmts.append("ALTER TABLE alerts ADD COLUMN audio_path VARCHAR(512) NULL")
-    if "acknowledged_at" not in cols:
-        stmts.append("ALTER TABLE alerts ADD COLUMN acknowledged_at TIMESTAMP NULL")
-    if stmts:
-        with engine.begin() as conn:
-            for s in stmts:
-                try:
-                    conn.execute(text(s))
-                    logger.info(f"Migration: {s}")
-                except Exception as e:
-                    logger.warning(f"Migration failed ({s}): {e}")
+        existing_tables = set(insp.get_table_names())
+    except Exception as exc:
+        raise RuntimeError(
+            "No se pudo inspeccionar la base de datos. Comprueba que MariaDB "
+            "esta levantado y ejecuta: mariadb -u root -p < backend/init_db.sql"
+        ) from exc
 
+    expected = {
+        table.name: {column.name for column in table.columns}
+        for table in Base.metadata.sorted_tables
+    }
+    missing_tables = sorted(set(expected) - existing_tables)
+    missing_columns: list[str] = []
+    for table_name, expected_columns in expected.items():
+        if table_name not in existing_tables:
+            continue
+        actual_columns = {column["name"] for column in insp.get_columns(table_name)}
+        for column_name in sorted(expected_columns - actual_columns):
+            missing_columns.append(f"{table_name}.{column_name}")
 
-def _migrate_user_identifier_columns() -> None:
-    """Allow patients to authenticate by username while caregivers keep email."""
-    from sqlalchemy import inspect, text
-    insp = inspect(engine)
-    try:
-        cols = {c["name"]: c for c in insp.get_columns("users")}
-    except Exception:
-        return
-
-    stmts: list[str] = []
-    if "username" not in cols:
-        stmts.append("ALTER TABLE users ADD COLUMN username VARCHAR(64) NULL UNIQUE")
-    if "email" in cols and not cols["email"].get("nullable", True):
-        stmts.append("ALTER TABLE users MODIFY email VARCHAR(255) NULL")
-
-    if stmts:
-        with engine.begin() as conn:
-            for s in stmts:
-                try:
-                    conn.execute(text(s))
-                    logger.info(f"Migration: {s}")
-                except Exception as e:
-                    logger.warning(f"Migration failed ({s}): {e}")
+    if missing_tables or missing_columns:
+        details: list[str] = []
+        if missing_tables:
+            details.append("tablas faltantes: " + ", ".join(missing_tables))
+        if missing_columns:
+            details.append("columnas faltantes: " + ", ".join(missing_columns))
+        raise RuntimeError(
+            "El esquema de MariaDB no coincide con el esquema canonico del proyecto. "
+            "La base de datos de entrega es reinicializable; ejecuta "
+            "`mariadb -u root -p < backend/init_db.sql` y vuelve a arrancar. "
+            + " | ".join(details)
+        )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _enforce_production_safety()
 
-    Base.metadata.create_all(bind=engine)
-    _migrate_user_identifier_columns()
-    _migrate_alert_audio_columns()
-    logger.info("Database tables verified/created.")
+    _verify_database_schema()
+    logger.info("Database schema verified.")
 
     from .services.alert_audio_retention import sweep_expired_alert_audio
     sweep_expired_alert_audio()

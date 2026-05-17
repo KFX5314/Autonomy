@@ -113,13 +113,11 @@ def default_patient_context(full_name: str) -> dict:
             "caregiver_names": [],
             "medical_notes": [],
         },
-        "risk_rules": [],
-        "trigger_phrases": [
+        "alert_phrases": [
             {"text": "ayuda", "severity": 5},
             {"text": "no s\u00e9 d\u00f3nde estoy", "severity": 5},
         ],
         "assistant_style": {
-            "language": "es-ES",
             "tone": "calmado",
             "max_words": 40,
         },
@@ -133,7 +131,6 @@ def create_patient_account(
     username: str | None,
     password: str,
     caregiver_id: int,
-    email: str | None = None,
 ) -> tuple[User, Patient]:
     if not password:
         raise HTTPException(status_code=400, detail="Password is required")
@@ -145,15 +142,11 @@ def create_patient_account(
         if manual_username
         else generate_unique_patient_username(db, clean_full_name)
     )
-    clean_email = normalize_email(email)
-
-    if clean_email and db.query(User).filter(User.email == clean_email).first():
-        raise HTTPException(status_code=400, detail="Email already registered")
     if db.query(User).filter(User.username == clean_username).first():
         raise HTTPException(status_code=400, detail="Username already registered")
 
     user = User(
-        email=clean_email,
+        email=None,
         username=clean_username,
         password_hash=hash_password(password),
         full_name=clean_full_name,

@@ -287,7 +287,7 @@ def _recalculate_voice_sample_states(
 
         next_sample["consistency_similarity"] = best_similarity
         if best_sample is not None:
-            next_sample["reference_sample_id"] = str(best_sample.get("id") or "legacy")
+            next_sample["reference_sample_id"] = str(best_sample.get("id") or "sample")
 
         if best_similarity >= consistency_threshold:
             next_sample["active"] = True
@@ -300,18 +300,7 @@ def _recalculate_voice_sample_states(
 
 
 def _voice_samples_from_store(voice_embedding: object) -> list[dict]:
-    """Return normalized sample dicts from single-vector or multi-sample storage."""
-    if _is_valid_embedding(voice_embedding):
-        return [{
-            "id": "legacy",
-            "created_at": None,
-            "embedding": voice_embedding,
-            "active": True,
-            "status": VOICE_SAMPLE_STATUS_ACTIVE,
-            "consistency_similarity": None,
-            "reference_sample_id": None,
-        }]
-
+    """Return normalized sample dicts from the multi-sample storage shape."""
     if isinstance(voice_embedding, dict):
         samples = voice_embedding.get("samples", [])
         if isinstance(samples, list):
@@ -334,7 +323,7 @@ def list_voice_samples(voice_embedding: object) -> list[dict]:
     """Return caregiver-safe metadata for stored voice samples."""
     return [
         {
-            "id": str(sample.get("id") or "legacy"),
+            "id": str(sample.get("id") or "sample"),
             "created_at": sample.get("created_at"),
             "embedding_size": len(sample.get("embedding") or []),
             "active": bool(sample.get("active")),
@@ -361,7 +350,7 @@ def append_voice_sample(voice_embedding: object, embedding: list[float]) -> dict
 def delete_voice_sample(voice_embedding: object, sample_id: str) -> dict | None:
     samples = [
         sample for sample in _voice_samples_from_store(voice_embedding)
-        if str(sample.get("id") or "legacy") != sample_id
+        if str(sample.get("id") or "sample") != sample_id
     ]
     if not samples:
         return None
@@ -379,13 +368,6 @@ def _active_voice_sample_vectors(voice_embedding: object) -> list[tuple[dict, np
         if emb is not None:
             vectors.append((sample, emb))
 
-    if not vectors:
-        if isinstance(voice_embedding, list):
-            logger.warning(
-                f"Stored voice embedding has {len(voice_embedding)} dims but the "
-                f"current encoder expects {EMBEDDING_DIM}. The patient must re-record "
-                "their voice sample."
-            )
     return vectors
 
 
@@ -408,58 +390,6 @@ def _best_active_sample_match(
     if best_sample is None:
         return None
     return {"sample": best_sample, "similarity": best_similarity}
-
-
-def _check_embedding_version(patient_embedding: object) -> bool:
-    """Validate that at least one stored embedding matches the current encoder."""
-    if not _active_voice_sample_vectors(patient_embedding):
-        logger.warning(
-            "No valid ECAPA-TDNN voice samples available for speaker verification."
-        )
-        return False
-    return True
-
-
-def identify_speaker(
-    audio_path: str,
-    patient_embedding: object,
-    threshold: float = DIARIZATION_THRESHOLD,
-) -> bool:
-    """
-    Compare an entire audio chunk against the stored patient embedding.
-    Returns True if the speaker is likely the patient.
-    """
-    sample_vectors = _active_voice_sample_vectors(patient_embedding)
-    if not sample_vectors:
-        return False
-
-    wav = _load_wav(audio_path)
-    if wav.numel() == 0:
-        return False
-
-    chunk_embedding = _embed(wav)
-    match_info = _best_active_sample_match(chunk_embedding, sample_vectors)
-    if match_info is None:
-        return False
-    similarity = float(match_info["similarity"])
-    sample = match_info["sample"]
-    sample_id = str(sample.get("id") or "legacy")
-
-    match = similarity >= threshold
-    clamped = max(0.0, min(1.0, similarity))
-    bar = "█" * int(clamped * 20) + "░" * (20 - int(clamped * 20))
-    color = "\033[92m" if match else "\033[91m"
-    rst = "\033[0m"
-    label = "PACIENTE" if match else "DESCONOCIDO"
-    bar = _similarity_bar(similarity)
-    confidence = _speaker_confidence(similarity, threshold)
-    print(f"\n{color}  [SPK] SPEAKER ID: {label}{rst}")
-    print(
-        f"     Similitud: {bar} {similarity:.3f}  "
-        f"(umbral {threshold}, confianza {confidence}, muestra {sample_id})"
-    )
-
-    return match
 
 
 def _expanded_segment_wav(wav: torch.Tensor, segments: list[dict], index: int) -> tuple[torch.Tensor, bool]:
@@ -538,7 +468,7 @@ def diarize_segments(
             else:
                 similarity = float(match_info["similarity"])
                 sample = match_info["sample"]
-                sample_id = str(sample.get("id") or "legacy")
+                sample_id = str(sample.get("id") or "sample")
             speaker, confidence = _speaker_label(similarity, threshold, uncertain_threshold)
             seg["speaker"] = speaker
             seg["speaker_similarity"] = similarity

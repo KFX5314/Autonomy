@@ -51,14 +51,12 @@ Login → JWT emitido → Cliente envía en header → get_current_user() valida
 | `PatientContext` | `patient_context` | JSON flexible con el contexto personalizado del paciente. 1:1 con Patient. |
 | `Transcript` | `transcripts` | Cada transcripción generada por Whisper. Vinculada al paciente. |
 | `Alert` | `alerts` | Alertas generadas por episodios detectados. Estados: NEW→ACK. |
-| `ConversationHistory` | `conversation_history` | Historial de conversación en modo asistente (futuro multi-turno). |
 
 **Relaciones clave:**
 ```
 User(caregiver) ──1:N──> User(patient) ──1:1──> Patient ──1:1──> PatientContext
                                                     │
                                                     ├──1:N──> Transcript ──1:1──> Alert
-                                                    └──1:N──> Alert ──1:N──> ConversationHistory
 ```
 
 ### 1.6 `schemas/` - Schemas Pydantic
@@ -73,11 +71,13 @@ Las schemas usan `from_attributes = True` para serializar directamente desde obj
 ### 1.7 `routes/` - Endpoints de la API
 
 #### `routes/auth.py`
-- **POST `/auth/register`**: Crea usuario (caregiver o patient). Si es paciente, crea también el perfil Patient y un contexto por defecto con frases gatillo básicas ("ayuda", "no sé dónde estoy").
+- **POST `/auth/register`**: Crea cuentas de responsable. Las cuentas de paciente se crean desde `/patients/` por un responsable autenticado.
 - **POST `/auth/login`**: Verifica credenciales, devuelve JWT + info del usuario.
 
 #### `routes/patients.py`
 - **GET `/patients/`**: Lista los pacientes vinculados al cuidador autenticado.
+- **POST `/patients/`**: Crea una cuenta de paciente vinculada al cuidador autenticado.
+- **DELETE `/patients/{id}`**: Elimina un paciente propio, su usuario y datos asociados por cascada; antes limpia audios archivados.
 - **GET `/patients/{id}/context`**: Devuelve el JSON de contexto. Verifica que el paciente pertenece al cuidador.
 - **PUT `/patients/{id}/context`**: Actualiza el contexto completo (reemplaza el JSON).
 
@@ -101,7 +101,7 @@ Las schemas usan `from_attributes = True` para serializar directamente desde obj
 
 Wrapper alrededor de OpenAI Whisper:
 - Carga el modelo de forma lazy (singleton) en el device configurado (GPU/CPU).
-- `transcribe_audio()` recibe un path de archivo y devuelve texto + idioma.
+- `transcribe_audio()` recibe un path de archivo y devuelve texto, codigo de idioma y segmentos.
 - Modelo configurable via `STT_MODEL` (base, small, medium, large-v3-turbo).
 
 ### 1.9 `services/episode_detector.py` - Detección de episodios
@@ -109,8 +109,7 @@ Wrapper alrededor de OpenAI Whisper:
 Motor de detección en **dos fases**:
 
 **Fase 1 - Reglas (determinista, instantánea):**
-- Busca coincidencias exactas con `trigger_phrases` del contexto.
-- Busca matches regex con `risk_rules`.
+- Busca coincidencias deterministas con `alert_phrases`, tanto frases literales como regex configurables.
 - Si hay coincidencia de severidad ≥ 4, responde inmediatamente.
 
 **Fase 2 - LLM (contextual, más lenta):**
@@ -220,33 +219,24 @@ Cliente API centralizado:
 
 ### Diagrama ER
 
-```
-users (id, email, password_hash, full_name, role, caregiver_id)
-  │
-  ├─ role='caregiver': caregiver_id = NULL
-  │
-  └─ role='patient': caregiver_id → users.id
-        │
-        └─ patients (id, user_id → users.id, birth_date, notes)
-              │
-              ├─ patient_context (patient_id → patients.id, context_json, updated_at)
-              │
-              ├─ transcripts (id, patient_id, started_at, ended_at, transcript_text, stt_model)
-              │     │
-              │     └─ alerts (id, patient_id, transcript_id, severity, reason, llm_response, status)
-              │           │
-              │           └─ conversation_history (id, alert_id, role, message)
-              │
-              └─ alerts (patient_id → patients.id)
+```text
+users (id, email, username, password_hash, full_name, role, caregiver_id)
+  |-- role='caregiver': email obligatorio, username NULL, caregiver_id NULL
+  `-- role='patient': username obligatorio, email NULL, caregiver_id -> users.id
+        |
+        `-- patients (id, user_id -> users.id, voice_embedding)
+              |-- patient_context (patient_id -> patients.id, context_json, updated_at)
+              |-- transcripts (id, patient_id, started_at, ended_at, transcript_text, stt_model)
+              |     `-- alerts (id, patient_id, transcript_id, severity, reason, llm_response, status)
+              |-- journal_entries (id, patient_id, covers_start, covers_end, summary_text)
+              `-- alerts (patient_id -> patients.id)
 ```
 
 ### Campo `context_json`
 
 Estructura JSON flexible que contiene:
 - `static_profile`: nombre, dirección, cuidadores, notas médicas.
-- `trigger_phrases`: frases que disparan alerta directa, con severidad.
-- `risk_rules`: patrones regex que indican riesgo.
-- `assistant_style`: configuración del tono/idioma/longitud del asistente.
+- `assistant_style`: configuracion del tono y longitud maxima del asistente.
 
 Esta estructura puede evolucionar sin migraciones de esquema.
 

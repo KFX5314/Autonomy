@@ -10,10 +10,10 @@ import React, { useCallback, useEffect, useState } from "react";
 import { View, ActivityIndicator, StyleSheet } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import * as Notifications from "expo-notifications";
-import { NavigationContainer } from "@react-navigation/native";
+import { NavigationContainer, createNavigationContainerRef } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 
-import { getCurrentUser, setToken } from "./src/services/api";
+import { getCurrentUser, setToken, setUnauthorizedHandler } from "./src/services/api";
 import { loadSession, saveSession, clearSession } from "./src/services/session";
 
 import LoginScreen from "./src/screens/LoginScreen";
@@ -23,6 +23,7 @@ import PatientContextScreen from "./src/screens/PatientContextScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
 
 const Stack = createNativeStackNavigator();
+const navigationRef = createNavigationContainerRef();
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -37,7 +38,20 @@ export default function App() {
   const [booted, setBooted] = useState(false);
   const [initialUser, setInitialUser] = useState(null);
 
+  const logoutToLogin = useCallback(async (navigation) => {
+    await clearSession();
+    setInitialUser(null);
+    const nav = navigationRef.isReady() ? navigationRef : navigation;
+    nav?.reset?.({ index: 0, routes: [{ name: "Login" }] });
+  }, []);
+
   useEffect(() => {
+    setUnauthorizedHandler(() => logoutToLogin());
+    return () => setUnauthorizedHandler(null);
+  }, [logoutToLogin]);
+
+  useEffect(() => {
+    let mounted = true;
     (async () => {
       const s = await loadSession();
       if (s) {
@@ -50,20 +64,27 @@ export default function App() {
             user_id: currentUser.id || user.user_id,
           };
           await saveSession(s.token, user);
+          if (mounted) setInitialUser(user);
         } catch (e) {
-          console.warn("Could not refresh stored session user:", e?.message || e);
+          if (e?.status === 401) {
+            await clearSession();
+            user = null;
+          } else {
+            console.warn("Could not refresh stored session user:", e?.message || e);
+            if (mounted) setInitialUser(user);
+          }
         }
-        setInitialUser(user);
       }
-      setBooted(true);
+      if (mounted) setBooted(true);
     })();
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   const makeLogout = useCallback((navigation) => async () => {
-    await clearSession();
-    setInitialUser(null);
-    navigation.reset({ index: 0, routes: [{ name: "Login" }] });
-  }, []);
+    await logoutToLogin(navigation);
+  }, [logoutToLogin]);
 
   if (!booted) {
     return (
@@ -82,7 +103,7 @@ export default function App() {
   return (
     <>
       <StatusBar style="dark" />
-      <NavigationContainer>
+      <NavigationContainer ref={navigationRef}>
         <Stack.Navigator
           initialRouteName={initialRouteName}
           screenOptions={{ headerShown: false }}

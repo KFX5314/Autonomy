@@ -1,53 +1,90 @@
 -- ============================================================
--- TFG-DEMENCIA: MariaDB Schema
+-- TFG-DEMENCIA: MariaDB canonical schema
 -- ============================================================
--- Run: mariadb -u root -p < init_db.sql
--- Or via Docker: docker exec -i mariadb mariadb -u root -prootpass < init_db.sql
+-- This script is intentionally resettable for the final academic delivery.
+-- It drops the local development database and recreates the complete schema.
+--
+-- Run from the project root:
+--   mariadb -u root -p < backend/init_db.sql
+--
+-- Or via Docker:
+--   docker exec -i mariadb mariadb -u root -prootpass < backend/init_db.sql
 -- ============================================================
 
-CREATE DATABASE IF NOT EXISTS tfg_demencia CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+DROP DATABASE IF EXISTS tfg_demencia;
+CREATE DATABASE tfg_demencia CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE OR REPLACE USER 'tfg_app'@'localhost'
+  IDENTIFIED VIA mysql_native_password
+  USING PASSWORD('tfg_pass_2024');
+CREATE OR REPLACE USER 'tfg_app'@'127.0.0.1'
+  IDENTIFIED VIA mysql_native_password
+  USING PASSWORD('tfg_pass_2024');
+
+GRANT ALL PRIVILEGES ON tfg_demencia.* TO 'tfg_app'@'localhost';
+GRANT ALL PRIVILEGES ON tfg_demencia.* TO 'tfg_app'@'127.0.0.1';
+FLUSH PRIVILEGES;
+
 USE tfg_demencia;
 
 -- ============================================================
--- USERS: Both caregivers and patients authenticate here.
--- role = 'caregiver' | 'patient'
--- Caregivers authenticate with email. Patients authenticate with username
--- because they may not have an email account.
--- A patient row is linked to its caregiver via caregiver_id.
+-- USERS
 -- ============================================================
-CREATE TABLE IF NOT EXISTS users (
+-- Caregivers authenticate with email.
+-- Patients authenticate with username because they may not have email.
+-- role controls which identifier is valid.
+-- ============================================================
+CREATE TABLE users (
     id              BIGINT          PRIMARY KEY AUTO_INCREMENT,
-    email           VARCHAR(255)    NULL UNIQUE COMMENT 'Required for caregivers; optional for patients',
-    username        VARCHAR(64)     NULL UNIQUE COMMENT 'Required for patients; optional for caregivers',
+    email           VARCHAR(255)    NULL UNIQUE COMMENT 'Required for caregivers; NULL for patients',
+    username        VARCHAR(64)     NULL UNIQUE COMMENT 'Required for patients; NULL for caregivers',
     password_hash   VARCHAR(255)    NOT NULL,
     full_name       VARCHAR(255)    NOT NULL,
     role            ENUM('caregiver','patient') NOT NULL,
     caregiver_id    BIGINT          NULL COMMENT 'Only for role=patient: FK to their caregiver',
     created_at      TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_user_caregiver FOREIGN KEY (caregiver_id) REFERENCES users(id)
-        ON DELETE SET NULL
+        ON DELETE RESTRICT,
+    CONSTRAINT ck_users_role_identifier CHECK (
+        (
+            role = 'caregiver'
+            AND email IS NOT NULL
+            AND username IS NULL
+            AND caregiver_id IS NULL
+        )
+        OR
+        (
+            role = 'patient'
+            AND email IS NULL
+            AND username IS NOT NULL
+            AND caregiver_id IS NOT NULL
+        )
+    )
 );
 
 -- ============================================================
--- PATIENTS: Extended profile for each patient user.
--- One-to-one with users WHERE role='patient'.
+-- PATIENTS
 -- ============================================================
-CREATE TABLE IF NOT EXISTS patients (
+-- One-to-one extended profile for users where role='patient'.
+-- voice_embedding stores the current multi-sample shape:
+--   {"samples": [{"id": "...", "embedding": [...], "active": true, ...}]}
+-- ============================================================
+CREATE TABLE patients (
     id              BIGINT          PRIMARY KEY AUTO_INCREMENT,
     user_id         BIGINT          NOT NULL UNIQUE,
-    birth_date      DATE            NULL,
-    notes           TEXT            NULL,
+    voice_embedding JSON            NULL,
     created_at      TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_patient_user FOREIGN KEY (user_id) REFERENCES users(id)
         ON DELETE CASCADE
 );
 
 -- ============================================================
--- PATIENT_CONTEXT: JSON-based flexible context per patient.
--- Maintained by the caregiver. Contains profile, triggers,
--- risk rules, assistant style, and rolling buffer config.
+-- PATIENT_CONTEXT
 -- ============================================================
-CREATE TABLE IF NOT EXISTS patient_context (
+-- Flexible caregiver-owned context. New records use alert_phrases as the
+-- unified deterministic phrase/regex list.
+-- ============================================================
+CREATE TABLE patient_context (
     patient_id      BIGINT          PRIMARY KEY,
     context_json    JSON            NOT NULL,
     updated_at      TIMESTAMP       DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -56,9 +93,9 @@ CREATE TABLE IF NOT EXISTS patient_context (
 );
 
 -- ============================================================
--- PUSH_TOKENS: Expo push tokens for caregiver devices.
+-- PUSH_TOKENS
 -- ============================================================
-CREATE TABLE IF NOT EXISTS push_tokens (
+CREATE TABLE push_tokens (
     id              BIGINT          PRIMARY KEY AUTO_INCREMENT,
     user_id         BIGINT          NOT NULL,
     token           VARCHAR(255)    NOT NULL UNIQUE,
@@ -72,10 +109,13 @@ CREATE TABLE IF NOT EXISTS push_tokens (
 );
 
 -- ============================================================
--- TRANSCRIPTS: Stored transcription results from audio chunks.
--- audio is NOT stored by default (privacy by design).
+-- TRANSCRIPTS
 -- ============================================================
-CREATE TABLE IF NOT EXISTS transcripts (
+-- Stored transcription results from audio chunks.
+-- Audio files are not stored by default; only alert-triggering chunks may be
+-- archived separately under the configured alert audio directory.
+-- ============================================================
+CREATE TABLE transcripts (
     id              BIGINT          PRIMARY KEY AUTO_INCREMENT,
     patient_id      BIGINT          NOT NULL,
     started_at      DATETIME        NOT NULL,
@@ -86,18 +126,17 @@ CREATE TABLE IF NOT EXISTS transcripts (
     created_at      TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_transcript_patient FOREIGN KEY (patient_id) REFERENCES patients(id)
         ON DELETE CASCADE,
-    INDEX idx_transcript_patient_time (patient_id, created_at)
+    INDEX ix_transcript_patient_started (patient_id, started_at)
 );
 
 -- ============================================================
--- ALERTS: Generated when an episode is detected.
--- Linked to the transcript that triggered it.
+-- ALERTS
 -- ============================================================
-CREATE TABLE IF NOT EXISTS alerts (
+CREATE TABLE alerts (
     id              BIGINT          PRIMARY KEY AUTO_INCREMENT,
     patient_id      BIGINT          NOT NULL,
     transcript_id   BIGINT          NULL,
-    severity        TINYINT         NOT NULL CHECK (severity BETWEEN 1 AND 5),
+    severity        SMALLINT        NOT NULL,
     reason          VARCHAR(512)    NOT NULL,
     llm_response    TEXT            NULL COMMENT 'Text generated by LLM for the patient',
     status          ENUM('NEW','ACK') DEFAULT 'NEW',
@@ -108,20 +147,25 @@ CREATE TABLE IF NOT EXISTS alerts (
         ON DELETE CASCADE,
     CONSTRAINT fk_alert_transcript FOREIGN KEY (transcript_id) REFERENCES transcripts(id)
         ON DELETE SET NULL,
+    CONSTRAINT ck_alert_severity CHECK (severity BETWEEN 1 AND 5),
     INDEX idx_alert_patient_status (patient_id, status)
 );
 
 -- ============================================================
--- CONVERSATION_HISTORY: Multi-turn assistant conversations
--- when the patient is in "assistant mode".
+-- JOURNAL_ENTRIES
 -- ============================================================
-CREATE TABLE IF NOT EXISTS conversation_history (
+-- Long-term memory entries generated asynchronously from recent transcripts.
+-- ============================================================
+CREATE TABLE journal_entries (
     id              BIGINT          PRIMARY KEY AUTO_INCREMENT,
-    alert_id        BIGINT          NOT NULL,
-    role            ENUM('patient','assistant') NOT NULL,
-    message         TEXT            NOT NULL,
+    patient_id      BIGINT          NOT NULL,
+    covers_start    DATETIME        NOT NULL,
+    covers_end      DATETIME        NOT NULL,
+    summary_text    VARCHAR(500)    NOT NULL,
     created_at      TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_convo_alert FOREIGN KEY (alert_id) REFERENCES alerts(id)
+    CONSTRAINT fk_journal_patient FOREIGN KEY (patient_id) REFERENCES patients(id)
         ON DELETE CASCADE,
-    INDEX idx_convo_alert (alert_id)
+    INDEX ix_journal_patient_created (patient_id, created_at)
 );
+
+SELECT 'OK: tfg_demencia reset and schema ready' AS result;

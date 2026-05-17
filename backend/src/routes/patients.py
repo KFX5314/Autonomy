@@ -21,6 +21,7 @@ from ..auth import require_caregiver, require_patient
 from ..services.patient_account_service import create_patient_account
 from ..services.memory_service import get_short_term
 from ..services.expo_push_service import notify_caregiver_alert
+from ..services.alert_audio_retention import delete_alert_audio
 from ..services.retention_service import cleanup_patient_retention_safely
 from ..services.speaker_id_service import (
     MAX_VOICE_SAMPLES,
@@ -50,8 +51,6 @@ def _patient_out(patient: Patient, patient_user: User) -> PatientOut:
         user_id=patient_user.id,
         full_name=patient_user.full_name,
         username=patient_user.username,
-        birth_date=patient.birth_date,
-        notes=patient.notes,
         created_at=patient.created_at,
     )
 
@@ -74,6 +73,35 @@ def create_patient(
     db.refresh(patient_user)
     db.refresh(patient)
     return _patient_out(patient, patient_user)
+
+
+@router.delete("/{patient_id}")
+def delete_patient(
+    patient_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_caregiver),
+):
+    """Delete one owned patient account and all associated patient data."""
+    patient = _get_owned_patient(patient_id, db, user)
+    patient_user = db.query(User).filter(User.id == patient.user_id).first()
+    if not patient_user:
+        raise HTTPException(status_code=404, detail="Patient user not found")
+
+    alerts_with_audio = (
+        db.query(Alert)
+        .filter(Alert.patient_id == patient.id)
+        .filter(Alert.audio_path.isnot(None))
+        .all()
+    )
+    for alert in alerts_with_audio:
+        delete_alert_audio(alert, reason="patient deletion")
+    if alerts_with_audio:
+        db.flush()
+
+    deleted_user_id = patient_user.id
+    db.delete(patient_user)
+    db.commit()
+    return {"status": "deleted", "patient_id": patient_id, "user_id": deleted_user_id}
 
 
 @router.get("/", response_model=list[PatientOut])

@@ -48,11 +48,20 @@ def _text_at_limit(prefix: str, max_chars: int) -> str:
 
 
 def _make_patient(db_session) -> Patient:
+    caregiver = User(
+        email="performance-care@example.com",
+        password_hash="hash",
+        full_name="Cuidador Performance",
+        role="caregiver",
+    )
+    db_session.add(caregiver)
+    db_session.flush()
     user = User(
         username="performance_patient",
         password_hash="hash",
         full_name="Paciente Performance",
         role="patient",
+        caregiver_id=caregiver.id,
     )
     db_session.add(user)
     db_session.flush()

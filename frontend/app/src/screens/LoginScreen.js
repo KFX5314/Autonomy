@@ -79,11 +79,9 @@ export default function LoginScreen({ onLogin }) {
       if (isRegister) {
         data = await register({
           email: cleanEmail,
-          username: null,
           password,
           fullName: cleanFullName,
           role: "caregiver",
-          caregiverEmail: null,
         });
       } else {
         data = await login(cleanIdentifier, password, role);

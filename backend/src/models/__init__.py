@@ -3,7 +3,7 @@
 from .user import User
 from .patient import Patient, PatientContext
 from .transcript import Transcript
-from .alert import Alert, ConversationHistory
+from .alert import Alert
 from .journal import JournalEntry
 from .push_token import PushToken
 
@@ -13,7 +13,6 @@ __all__ = [
     "PatientContext",
     "Transcript",
     "Alert",
-    "ConversationHistory",
     "JournalEntry",
     "PushToken",
 ]

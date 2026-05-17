@@ -22,7 +22,7 @@ from src.middleware.size_limit import BodySizeLimitMiddleware
 from src.routes import alerts_router, audio_router, auth_router, patients_router, push_tokens_router
 
 # Import models so Base.metadata contains every table.
-from src.models.alert import Alert, ConversationHistory  # noqa: F401
+from src.models.alert import Alert  # noqa: F401
 from src.models.journal import JournalEntry  # noqa: F401
 from src.models.patient import Patient, PatientContext  # noqa: F401
 from src.models.push_token import PushToken  # noqa: F401

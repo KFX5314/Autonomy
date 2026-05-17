@@ -81,3 +81,16 @@ def test_uncertain_patient_text_is_available_to_llm_prompt():
 
     assert "[PACIENTE?] significa" in prompt
     assert "[PACIENTE?] ayuda" in prompt
+
+
+def test_untagged_transcript_is_explained_as_unverified_patient_audio_to_llm():
+    transcript = "ayuda no se donde estoy"
+
+    assert _extract_patient_text(transcript) == transcript
+    assert _extract_possible_patient_text(transcript) == transcript
+
+    prompt = _build_analysis_prompt({}, transcript)
+
+    assert "Si no hay etiquetas de hablante" in prompt
+    assert "sin verificación de voz" in prompt
+    assert transcript in prompt

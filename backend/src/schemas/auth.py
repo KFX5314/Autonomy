@@ -3,11 +3,9 @@ from pydantic import BaseModel, EmailStr
 
 class RegisterRequest(BaseModel):
     email: EmailStr | None = None
-    username: str | None = None
     password: str
     full_name: str
     role: str  # public registration only accepts "caregiver"
-    caregiver_email: EmailStr | None = None
 
 
 class LoginRequest(BaseModel):

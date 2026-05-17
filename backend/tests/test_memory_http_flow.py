@@ -44,13 +44,10 @@ def _set_wake_word_context(client, caregiver_token: str, patient_id: int) -> Non
             "medical_notes": [],
         },
         "assistant_style": {
-            "language": "es-ES",
             "tone": "calmado",
             "max_words": 40,
         },
         "alert_phrases": [],
-        "risk_rules": [],
-        "trigger_phrases": [],
     }
     response = client.put(
         f"/patients/{patient_id}/context",

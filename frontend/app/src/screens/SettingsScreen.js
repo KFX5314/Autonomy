@@ -1,7 +1,7 @@
 /**
  * Role-neutral Settings screen.
  *
- * Shows current account info, app version, a few stubbed future-features,
+ * Shows current account info, patient TTS settings, app version,
  * and a prominent red "Cerrar sesión" action. Animated entry: fade + slide up.
  */
 import React, { useEffect, useRef, useState } from "react";
@@ -50,9 +50,6 @@ export default function SettingsScreen({ navigation, route }) {
       }
     })();
   }, [isPatient, userId]);
-
-  const stub = (title) => () =>
-    RNAlert.alert(title, "Próximamente.", [{ text: "OK" }]);
 
   const version =
     Constants?.expoConfig?.version ||
@@ -131,9 +128,9 @@ export default function SettingsScreen({ navigation, route }) {
           </View>
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Preferencias</Text>
-          {isPatient ? (
+        {isPatient ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Preferencias</Text>
             <View style={styles.item}>
               <View style={styles.itemTextBlock}>
                 <Text style={styles.itemLabel}>TTS del paciente</Text>
@@ -149,29 +146,8 @@ export default function SettingsScreen({ navigation, route }) {
                 onValueChange={handleTtsToggle}
               />
             </View>
-          ) : null}
-          <Pressable
-            style={({ pressed }) => [styles.item, pressed && styles.itemPressed]}
-            onPress={stub("Cambiar contraseña")}
-          >
-            <Text style={styles.itemLabel}>Cambiar contraseña</Text>
-            <Text style={styles.itemArrow}>›</Text>
-          </Pressable>
-          <Pressable
-            style={({ pressed }) => [styles.item, pressed && styles.itemPressed]}
-            onPress={stub("Tema oscuro")}
-          >
-            <Text style={styles.itemLabel}>Tema oscuro</Text>
-            <Text style={styles.itemArrow}>›</Text>
-          </Pressable>
-          <Pressable
-            style={({ pressed }) => [styles.item, pressed && styles.itemPressed]}
-            onPress={stub("Notificaciones")}
-          >
-            <Text style={styles.itemLabel}>Notificaciones</Text>
-            <Text style={styles.itemArrow}>›</Text>
-          </Pressable>
-        </View>
+          </View>
+        ) : null}
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Acerca de</Text>
@@ -246,11 +222,9 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "#F1F1F1",
   },
-  itemPressed: { backgroundColor: "#EEF4FB" },
   itemTextBlock: { flex: 1, paddingRight: 12 },
   itemLabel: { fontSize: 15, color: "#222" },
   itemHint: { fontSize: 12, color: "#777", marginTop: 3 },
-  itemArrow: { fontSize: 20, color: "#BBB" },
   logoutBtn: {
     backgroundColor: "#E74C3C",
     borderRadius: 14,

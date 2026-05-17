@@ -13,7 +13,7 @@ class JournalEntry(Base):
     __tablename__ = "journal_entries"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    patient_id = Column(BigInteger, ForeignKey("patients.id"), nullable=False)
+    patient_id = Column(BigInteger, ForeignKey("patients.id", ondelete="CASCADE"), nullable=False)
     covers_start = Column(DateTime, nullable=False)
     covers_end = Column(DateTime, nullable=False)
     summary_text = Column(String(500), nullable=False)

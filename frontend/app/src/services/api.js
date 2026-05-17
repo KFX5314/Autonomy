@@ -3,6 +3,7 @@ import appConfig from "../config/appConfig";
 const { api } = appConfig;
 
 let _token = null;
+let _onUnauthorized = null;
 
 export function setToken(token) {
   _token = token;
@@ -10,6 +11,26 @@ export function setToken(token) {
 
 export function getToken() {
   return _token;
+}
+
+export function setUnauthorizedHandler(handler) {
+  _onUnauthorized = handler;
+}
+
+function makeApiError(res, text) {
+  let detail = text;
+  try {
+    detail = JSON.parse(text).detail || text;
+  } catch {}
+  const error = new Error(detail || `HTTP ${res.status}`);
+  error.status = res.status;
+  return error;
+}
+
+function throwIfUnauthorized(error) {
+  if (error.status === 401 && _token && _onUnauthorized) {
+    _onUnauthorized();
+  }
 }
 
 async function request(path, options = {}) {
@@ -26,11 +47,9 @@ async function request(path, options = {}) {
   const text = await res.text();
 
   if (!res.ok) {
-    let detail = text;
-    try {
-      detail = JSON.parse(text).detail || text;
-    } catch {}
-    throw new Error(detail);
+    const error = makeApiError(res, text);
+    throwIfUnauthorized(error);
+    throw error;
   }
 
   return text ? JSON.parse(text) : null;
@@ -44,16 +63,14 @@ export async function login(identifier, password, role) {
   });
 }
 
-export async function register({ email, username, password, fullName, role, caregiverEmail }) {
+export async function register({ email, password, fullName, role }) {
   return request("/auth/register", {
     method: "POST",
     body: JSON.stringify({
       email: email || null,
-      username: username || null,
       password,
       full_name: fullName,
       role,
-      caregiver_email: caregiverEmail || null,
     }),
   });
 }
@@ -75,6 +92,12 @@ export async function createPatientForCaregiver({ fullName, username, password }
       username: username || null,
       password,
     }),
+  });
+}
+
+export async function deletePatient(patientId) {
+  return request(`/patients/${patientId}`, {
+    method: "DELETE",
   });
 }
 
@@ -198,7 +221,11 @@ async function _sendAudioChunkOnce(uri, metadata = {}) {
     });
 
     const text = await res.text();
-    if (!res.ok) throw new Error(text);
+    if (!res.ok) {
+      const error = makeApiError(res, text);
+      throwIfUnauthorized(error);
+      throw error;
+    }
     return JSON.parse(text);
   } finally {
     clearTimeout(timer);
@@ -210,6 +237,7 @@ export async function sendAudioChunk(uri, metadata = {}) {
     try {
       return await _sendAudioChunkOnce(uri, metadata);
     } catch (e) {
+      if (e.status === 401) throw e;
       const isLast = attempt >= api.audioChunkMaxRetries;
       if (isLast) throw e;
       console.warn(`[API] Audio chunk attempt ${attempt + 1} failed: ${e.message} — retrying...`);
@@ -239,7 +267,11 @@ export async function uploadVoiceSample(patientId, uri) {
   });
 
   const text = await res.text();
-  if (!res.ok) throw new Error(text);
+  if (!res.ok) {
+    const error = makeApiError(res, text);
+    throwIfUnauthorized(error);
+    throw error;
+  }
   return JSON.parse(text);
 }
 

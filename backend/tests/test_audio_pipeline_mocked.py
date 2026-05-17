@@ -123,6 +123,66 @@ def test_audio_chunk_creates_alert_with_mocked_models(
     ]
 
 
+def test_audio_chunk_without_voice_sample_uses_plain_transcript_as_patient_text(
+    client,
+    db_session,
+    monkeypatch,
+    register_caregiver,
+    register_patient,
+):
+    register_caregiver(client)
+    patient = register_patient(client, username="no_voice_sample_patient")
+
+    alert_audio_dir = Path(".pytest_runtime") / "alert_audio" / uuid4().hex
+    alert_audio_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(audio_route.config, "ALERTS_AUDIO_DIR", str(alert_audio_dir))
+    monkeypatch.setattr(audio_route, "should_schedule_journal", lambda *args, **kwargs: False)
+    monkeypatch.setattr(audio_route, "enforce_patient_audio_cap", lambda db, patient_id: None)
+    monkeypatch.setattr(
+        audio_route.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(stdout="1.2"),
+    )
+    monkeypatch.setattr(
+        audio_route,
+        "transcribe_audio",
+        lambda path, audio_duration=None: {
+            "text": "ayuda no se donde estoy",
+            "language": "es",
+            "segments": [{"start": 0.0, "end": 1.0, "text": "ayuda no se donde estoy"}],
+        },
+    )
+    monkeypatch.setattr(
+        audio_route,
+        "diarize_segments",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Diarization should not run without voice samples")
+        ),
+    )
+    monkeypatch.setattr(
+        "src.services.episode_detector.get_llm_provider",
+        lambda: FakeLLM(),
+    )
+
+    response = client.post(
+        "/audio/chunk",
+        headers=auth_headers(patient["access_token"]),
+        files={"file": ("chunk.wav", b"fake audio", "audio/wav")},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["episode"] is True
+    assert body["severity"] == 5
+    assert body["mode"] == "episode"
+    assert body["transcript"] == "ayuda no se donde estoy"
+    assert body["segments"] == [{"start": 0.0, "end": 1.0}]
+
+    stored = db_session.query(Transcript).filter(Transcript.stt_model != "assistant_tts").one()
+    assert stored.transcript_text == "ayuda no se donde estoy"
+    assert db_session.query(Alert).count() == 1
+
+
 def test_audio_chunk_rejects_invalid_mime(client, register_caregiver, register_patient):
     register_caregiver(client)
     patient = register_patient(client, username="mime_patient")

@@ -70,25 +70,11 @@ def test_best_active_sample_decides_similarity_when_multiple_active_samples():
     assert math.isclose(match["similarity"], second_sample[1], rel_tol=1e-6)
 
 
-def test_legacy_embedding_is_treated_as_active_sample():
-    legacy = _embedding((0, 1.0))
+def test_plain_embedding_list_is_ignored():
+    embedding = _embedding((0, 1.0))
 
-    samples = list_voice_samples(legacy)
-    match = _best_active_sample_match(legacy, _active_voice_sample_vectors(legacy))
-
-    assert samples == [
-        {
-            "id": "legacy",
-            "created_at": None,
-            "embedding_size": 192,
-            "active": True,
-            "status": "active",
-            "consistency_similarity": None,
-            "reference_sample_id": None,
-        }
-    ]
-    assert match["sample"]["id"] == "legacy"
-    assert match["similarity"] == 1.0
+    assert list_voice_samples(embedding) == []
+    assert _active_voice_sample_vectors(embedding) == []
 
 
 def test_deleting_base_sample_recalculates_remaining_voice_sample_states():

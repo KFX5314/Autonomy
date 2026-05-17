@@ -13,6 +13,7 @@ import {
 import { Audio } from "expo-av";
 import appConfig from "../config/appConfig";
 import {
+  deletePatient,
   deleteVoiceSample,
   getPatientContext,
   getVoiceSamples,
@@ -29,6 +30,7 @@ export default function PatientContextScreen({ patient, onBack }) {
   const [context, setContext] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const [preferredName, setPreferredName] = useState("");
   const [address, setAddress] = useState("");
@@ -75,38 +77,15 @@ export default function PatientContextScreen({ patient, onBack }) {
       setUiColor(ctx.ui_color || "#4A90D9");
       setTtsEnabled(ctx.tts_enabled !== false);
 
-      // Old saved contexts may still store trigger_phrases + risk_rules.
-      let phrases = [];
-      if (Array.isArray(ctx.alert_phrases) && ctx.alert_phrases.length) {
-        phrases = ctx.alert_phrases.map((it) =>
-          typeof it === "string"
-            ? { text: it, severity: 3, regex: false }
-            : {
-                text: it.text || "",
-                severity: Number(it.severity) || 3,
-                regex: !!it.regex,
-              }
-        );
-      } else {
-        for (const t of ctx.trigger_phrases || []) {
-          if (typeof t === "string") phrases.push({ text: t, severity: 3, regex: false });
-          else if (t && t.text)
-            phrases.push({
-              text: t.text,
-              severity: Number(t.severity) || 3,
-              regex: !!t.regex,
-            });
-        }
-        for (const r of ctx.risk_rules || []) {
-          const pat = typeof r === "string" ? r : r.pattern || r.text;
-          if (pat)
-            phrases.push({
-              text: pat,
-              severity: Number(r.severity) || 4,
-              regex: r.regex !== undefined ? !!r.regex : true,
-            });
-        }
-      }
+      const phrases = (ctx.alert_phrases || []).map((it) =>
+        typeof it === "string"
+          ? { text: it, severity: 3, regex: false }
+          : {
+              text: it.text || "",
+              severity: Number(it.severity) || 3,
+              regex: !!it.regex,
+            }
+      );
       setAlertPhrases(phrases);
 
       const waw = (ctx.assistant_wake_words || []).map((w) =>
@@ -240,10 +219,6 @@ export default function PatientContextScreen({ patient, onBack }) {
         alert_phrases: cleanedPhrases,
         assistant_wake_words: cleanedWakeWords,
       };
-      // Store only the unified alert_phrases shape after editing.
-      delete newContext.trigger_phrases;
-      delete newContext.risk_rules;
-
       await updatePatientContext(patient.id, newContext);
       Alert.alert("Guardado", "Contexto actualizado correctamente.", [
         { text: "OK", onPress: () => onBack?.() },
@@ -253,6 +228,33 @@ export default function PatientContextScreen({ patient, onBack }) {
       setSaving(false);
       Alert.alert("Error", e.message);
     }
+  };
+
+  const handleDeletePatient = () => {
+    if (deleting) return;
+    Alert.alert(
+      "Eliminar paciente",
+      "Se eliminarán la cuenta del paciente y todos sus datos asociados. Esta acción no se puede deshacer.",
+      [
+        { text: "Cancelar", style: "cancel" },
+        {
+          text: "Eliminar",
+          style: "destructive",
+          onPress: async () => {
+            setDeleting(true);
+            try {
+              await deletePatient(patient.id);
+              Alert.alert("Paciente eliminado", "El paciente y sus datos asociados se han eliminado.", [
+                { text: "OK", onPress: () => onBack?.() },
+              ]);
+            } catch (e) {
+              setDeleting(false);
+              Alert.alert("Error", "No se pudo eliminar el paciente: " + e.message);
+            }
+          },
+        },
+      ]
+    );
   };
 
   if (loading) {
@@ -457,6 +459,16 @@ export default function PatientContextScreen({ patient, onBack }) {
       >
         <Text style={styles.saveText}>{saving ? "Guardando..." : "Guardar configuración"}</Text>
       </Pressable>
+
+      <Pressable
+        style={[styles.deletePatientBtn, deleting && styles.deletePatientBtnDisabled]}
+        onPress={handleDeletePatient}
+        disabled={deleting}
+      >
+        <Text style={styles.deletePatientText}>
+          {deleting ? "Eliminando..." : "Eliminar paciente"}
+        </Text>
+      </Pressable>
     </ScrollView>
   );
 }
@@ -586,10 +598,22 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     alignItems: "center",
     marginTop: 24,
-    marginBottom: 40,
+    marginBottom: 18,
   },
   saveBtnDisabled: { backgroundColor: "#8DBBE6" },
   saveText: { color: "#fff", fontSize: 17, fontWeight: "700" },
+  deletePatientBtn: {
+    borderWidth: 1,
+    borderColor: "#E74C3C",
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: "center",
+    marginTop: 0,
+    marginBottom: 40,
+    backgroundColor: "#fff",
+  },
+  deletePatientBtnDisabled: { opacity: 0.55 },
+  deletePatientText: { color: "#E74C3C", fontSize: 15, fontWeight: "700" },
   voiceBtn: {
     backgroundColor: "#27AE60",
     borderRadius: 12,

@@ -114,10 +114,9 @@ Opción A: MariaDB local ya instalado.
 
 ```powershell
 mariadb -u root -p < backend/init_db.sql
-mariadb -u root -p < backend/fix_auth.sql
 ```
 
-`fix_auth.sql` crea o ajusta el usuario `tfg_app`, necesario especialmente en instalaciones recientes de MariaDB.
+`init_db.sql` reinicia la base `tfg_demencia`, crea el esquema canonico completo y prepara el usuario local `tfg_app`.
 Si tu instalación conserva el alias `mysql`, puedes usarlo como equivalente.
 
 Opción B: contenedor solo para MariaDB.
@@ -212,21 +211,21 @@ Si arrancas Expo manualmente y el `.env` conserva una URL `http://100.x.y.z:8000
 ## Flujo de prueba completo
 
 1. Registra un cuidador desde la pantalla de login: `Regístrate` -> `Responsable`.
-2. Cierra sesión y registra un paciente: `Regístrate` -> `Paciente` -> introduce un usuario para el paciente y el email del cuidador.
-3. Inicia sesión como cuidador y abre el paciente vinculado.
-4. Edita el contexto:
+2. Inicia sesion como cuidador y crea un paciente desde `Anadir paciente`.
+3. Cierra sesion e inicia sesion como paciente con el usuario generado o asignado.
+4. Vuelve como cuidador y abre el paciente vinculado.
+5. Edita el contexto:
    - perfil del paciente;
    - dirección habitual;
    - nombres de cuidadores;
    - notas médicas;
-   - frases de alerta;
-   - reglas regex;
+   - frases o patrones de alerta;
    - palabras de activación del asistente.
-5. Graba una muestra de voz del paciente de 10 segundos para habilitar diarización.
-6. Inicia sesión como paciente y pulsa `Activar escucha`.
-7. Prueba una frase de alerta, por ejemplo `ayuda` o `no sé dónde estoy`.
-8. Prueba una palabra de activación, por ejemplo `asistente`, si la configuraste en el contexto.
-9. Vuelve como cuidador y revisa:
+6. Graba una muestra de voz del paciente de 10 segundos para habilitar diarización.
+7. Inicia sesión como paciente y pulsa `Activar escucha`.
+8. Prueba una frase de alerta, por ejemplo `ayuda` o `no sé dónde estoy`.
+9. Prueba una palabra de activación, por ejemplo `asistente`, si la configuraste en el contexto.
+10. Vuelve como cuidador y revisa:
    - alerta nueva;
    - severidad y razón;
    - transcripción etiquetada;
@@ -286,7 +285,6 @@ El script prefiere IP Tailscale y usa IP LAN como alternativa.
 TFG-DEMENCIA/
 ├── backend/
 │   ├── init_db.sql
-│   ├── fix_auth.sql
 │   ├── requirements.txt
 │   └── src/
 │       ├── server.py
@@ -450,10 +448,12 @@ La documentación interactiva completa está disponible en `/docs` cuando el bac
 
 | Método | Ruta | Rol | Uso |
 |---|---|---|---|
-| `POST` | `/auth/register` | Público | Registro cuidador/paciente |
+| `POST` | `/auth/register` | Público | Registro de responsable |
 | `POST` | `/auth/login` | Público | Login y JWT |
 | `GET` | `/auth/me` | Autenticado | Consultar cuenta actual |
 | `GET` | `/patients/` | Cuidador | Listar pacientes vinculados |
+| `POST` | `/patients/` | Cuidador | Crear paciente vinculado |
+| `DELETE` | `/patients/{id}` | Cuidador propietario | Eliminar paciente y datos asociados |
 | `GET` | `/patients/{id}/context` | Cuidador | Obtener contexto |
 | `PUT` | `/patients/{id}/context` | Cuidador | Actualizar contexto |
 | `POST` | `/patients/{id}/voice-sample` | Cuidador | Subir muestra de voz |
@@ -467,7 +467,7 @@ La documentación interactiva completa está disponible en `/docs` cuando el bac
 | `POST` | `/alerts/{id}/ack` | Cuidador | Aceptar alerta |
 | `GET` | `/health` | Público | Estado backend/LLM |
 
-En autenticación, el responsable se registra e inicia sesión con email. El paciente se registra con `username` y el email de su responsable, e inicia sesión seleccionando rol `Paciente` y usando ese usuario.
+En autenticacion, el responsable se registra e inicia sesion con email. El paciente lo crea un responsable desde su panel, recibe un `username` generado o asignado, e inicia sesion seleccionando rol `Paciente` y usando ese usuario.
 
 ## Decisiones de diseño
 

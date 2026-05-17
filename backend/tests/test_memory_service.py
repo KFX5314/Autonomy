@@ -22,11 +22,20 @@ class FakeLLM:
 
 
 def _make_patient(db_session, username: str = "memory_patient") -> Patient:
+    caregiver = User(
+        email=f"{username}-care@example.com",
+        password_hash="hash",
+        full_name="Cuidador Memoria",
+        role="caregiver",
+    )
+    db_session.add(caregiver)
+    db_session.flush()
     user = User(
         username=username,
         password_hash="hash",
         full_name="Paciente Memoria",
         role="patient",
+        caregiver_id=caregiver.id,
     )
     db_session.add(user)
     db_session.flush()

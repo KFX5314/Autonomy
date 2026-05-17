@@ -21,11 +21,20 @@ class CaptureLLM:
 
 
 def _make_patient(db_session) -> Patient:
+    caregiver = User(
+        email="assistant-care@example.com",
+        password_hash="hash",
+        full_name="Cuidador Asistente",
+        role="caregiver",
+    )
+    db_session.add(caregiver)
+    db_session.flush()
     user = User(
         username="assistant_patient",
         password_hash="hash",
         full_name="Paciente Asistente",
         role="patient",
+        caregiver_id=caregiver.id,
     )
     db_session.add(user)
     db_session.flush()

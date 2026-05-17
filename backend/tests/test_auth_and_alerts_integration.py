@@ -1,8 +1,15 @@
 import re
+from datetime import UTC, datetime
 
 import pytest
 
 from conftest import auth_headers
+from src.models.alert import Alert
+from src.models.journal import JournalEntry
+from src.models.patient import Patient, PatientContext
+from src.models.push_token import PushToken
+from src.models.transcript import Transcript
+from src.models.user import User
 
 pytestmark = pytest.mark.integration
 
@@ -234,6 +241,151 @@ def test_patient_cannot_access_caregiver_routes(client, register_caregiver, regi
     patient = register_patient(client)
 
     response = client.get("/patients/", headers=auth_headers(patient["access_token"]))
+
+    assert response.status_code == 403
+
+
+def test_caregiver_can_delete_owned_patient_with_associated_data(
+    client,
+    db_session,
+    tmp_path,
+    register_caregiver,
+):
+    caregiver = register_caregiver(client, email="delete-owner@example.com")
+    created = client.post(
+        "/patients/",
+        headers=auth_headers(caregiver["access_token"]),
+        json={
+            "full_name": "Paciente Borrable",
+            "username": "borrable",
+            "password": "secret123",
+        },
+    )
+    assert created.status_code == 200, created.text
+    patient_id = created.json()["id"]
+    patient_user_id = created.json()["user_id"]
+
+    patient_login = client.post(
+        "/auth/login",
+        json={"identifier": "borrable", "password": "secret123", "role": "patient"},
+    )
+    assert patient_login.status_code == 200, patient_login.text
+    patient_token = patient_login.json()["access_token"]
+
+    audio_path = tmp_path / "alert-audio.m4a"
+    audio_path.write_bytes(b"fake audio")
+    now = datetime.now(UTC).replace(tzinfo=None)
+    transcript = Transcript(
+        patient_id=patient_id,
+        started_at=now,
+        ended_at=now,
+        lang="es",
+        transcript_text="quiero irme a casa",
+        stt_model="mock",
+    )
+    db_session.add(transcript)
+    db_session.flush()
+    db_session.add_all(
+        [
+            Alert(
+                patient_id=patient_id,
+                transcript_id=transcript.id,
+                severity=4,
+                reason="Desorientacion",
+                llm_response="Aviso al responsable",
+                status="NEW",
+                audio_path=str(audio_path),
+            ),
+            JournalEntry(
+                patient_id=patient_id,
+                covers_start=now,
+                covers_end=now,
+                summary_text="El paciente hablo de irse.",
+            ),
+            PushToken(user_id=patient_user_id, token="ExponentPushToken[patient-delete]"),
+        ]
+    )
+    db_session.commit()
+
+    response = client.delete(
+        f"/patients/{patient_id}",
+        headers=auth_headers(caregiver["access_token"]),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "deleted"
+    assert response.json()["patient_id"] == patient_id
+    assert response.json()["user_id"] == patient_user_id
+    assert not audio_path.exists()
+
+    db_session.expire_all()
+    assert db_session.get(User, patient_user_id) is None
+    assert db_session.get(Patient, patient_id) is None
+    assert db_session.get(PatientContext, patient_id) is None
+    assert db_session.query(Transcript).filter(Transcript.patient_id == patient_id).count() == 0
+    assert db_session.query(Alert).filter(Alert.patient_id == patient_id).count() == 0
+    assert db_session.query(JournalEntry).filter(JournalEntry.patient_id == patient_id).count() == 0
+    assert db_session.query(PushToken).filter(PushToken.user_id == patient_user_id).count() == 0
+
+    old_token_me = client.get("/auth/me", headers=auth_headers(patient_token))
+    assert old_token_me.status_code == 401
+
+
+def test_only_associated_caregiver_can_delete_patient(
+    client,
+    register_caregiver,
+):
+    owner = register_caregiver(client, email="delete-real-owner@example.com")
+    other = register_caregiver(client, email="delete-other@example.com")
+    created = client.post(
+        "/patients/",
+        headers=auth_headers(owner["access_token"]),
+        json={
+            "full_name": "Paciente Ajeno",
+            "username": "paciente_ajeno",
+            "password": "secret123",
+        },
+    )
+    assert created.status_code == 200, created.text
+
+    response = client.delete(
+        f"/patients/{created.json()['id']}",
+        headers=auth_headers(other["access_token"]),
+    )
+
+    assert response.status_code == 403
+    patient_login = client.post(
+        "/auth/login",
+        json={"identifier": "paciente_ajeno", "password": "secret123", "role": "patient"},
+    )
+    assert patient_login.status_code == 200
+
+
+def test_patient_cannot_delete_patient(
+    client,
+    register_caregiver,
+):
+    caregiver = register_caregiver(client, email="patient-delete-care@example.com")
+    created = client.post(
+        "/patients/",
+        headers=auth_headers(caregiver["access_token"]),
+        json={
+            "full_name": "Paciente Sin Permiso",
+            "username": "sin_permiso",
+            "password": "secret123",
+        },
+    )
+    assert created.status_code == 200, created.text
+    patient_login = client.post(
+        "/auth/login",
+        json={"identifier": "sin_permiso", "password": "secret123", "role": "patient"},
+    )
+    assert patient_login.status_code == 200, patient_login.text
+
+    response = client.delete(
+        f"/patients/{created.json()['id']}",
+        headers=auth_headers(patient_login.json()["access_token"]),
+    )
 
     assert response.status_code == 403
 
