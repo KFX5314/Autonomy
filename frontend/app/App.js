@@ -139,10 +139,7 @@ export default function App() {
                   props.navigation.navigate("PatientContext", { patient })
                 }
                 onOpenSettings={() =>
-                  props.navigation.navigate("Settings", {
-                    user: initialUser,
-                    onLogout: makeLogout(props.navigation),
-                  })
+                  props.navigation.navigate("Settings")
                 }
               />
             )}
@@ -171,16 +168,21 @@ export default function App() {
                 user={initialUser || {}}
                 onLogout={makeLogout(props.navigation)}
                 onOpenSettings={() =>
-                  props.navigation.navigate("Settings", {
-                    user: initialUser,
-                    onLogout: makeLogout(props.navigation),
-                  })
+                  props.navigation.navigate("Settings")
                 }
               />
             )}
           </Stack.Screen>
 
-          <Stack.Screen name="Settings" component={SettingsScreen} />
+          <Stack.Screen name="Settings">
+            {(props) => (
+              <SettingsScreen
+                {...props}
+                user={initialUser}
+                onLogout={makeLogout(props.navigation)}
+              />
+            )}
+          </Stack.Screen>
         </Stack.Navigator>
       </NavigationContainer>
     </>

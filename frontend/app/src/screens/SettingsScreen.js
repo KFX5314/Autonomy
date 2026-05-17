@@ -19,9 +19,9 @@ import Constants from "expo-constants";
 import { getMyPatientSettings, sendPatientLogoutWarning } from "../services/api";
 import { loadPatientTtsEnabled, savePatientTtsEnabled } from "../services/session";
 
-export default function SettingsScreen({ navigation, route }) {
-  const user = route?.params?.user;
-  const onLogout = route?.params?.onLogout;
+export default function SettingsScreen({ navigation, route, user: propUser, onLogout: propOnLogout }) {
+  const user = propUser || route?.params?.user;
+  const onLogout = propOnLogout || route?.params?.onLogout;
   const isPatient = user?.role === "patient";
   const userId = user?.user_id || user?.id;
   const [caregiverTtsEnabled, setCaregiverTtsEnabled] = useState(true);

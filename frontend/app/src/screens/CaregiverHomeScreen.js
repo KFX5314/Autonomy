@@ -17,6 +17,7 @@ import {
   KeyboardAvoidingView,
 } from "react-native";
 import * as Notifications from "expo-notifications";
+import Constants from "expo-constants";
 import { useFocusEffect } from "@react-navigation/native";
 import appConfig from "../config/appConfig";
 import {
@@ -34,6 +35,13 @@ import AlertCard from "../components/AlertCard";
 const { caregiver } = appConfig;
 
 const USERNAME_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789";
+let pushSetupWarningShown = false;
+
+function warnPushSetupOnce(message) {
+  if (pushSetupWarningShown) return;
+  pushSetupWarningShown = true;
+  console.warn(message);
+}
 
 function randomUsernameBase() {
   let suffix = "";
@@ -87,6 +95,15 @@ function suggestPatientUsername(fullName, patients) {
 
 async function registerCaregiverPushToken() {
   if (Platform.OS === "web") return null;
+  if (Constants.appOwnership === "expo") return null;
+
+  const projectId =
+    Constants?.expoConfig?.extra?.eas?.projectId ||
+    Constants?.easConfig?.projectId;
+  if (!projectId) {
+    warnPushSetupOnce("Could not register push token: missing EAS projectId.");
+    return null;
+  }
 
   const existing = await Notifications.getPermissionsAsync();
   let status = existing.status;
@@ -105,7 +122,7 @@ async function registerCaregiverPushToken() {
     });
   }
 
-  const token = (await Notifications.getExpoPushTokenAsync()).data;
+  const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
   return token || null;
 }
 
