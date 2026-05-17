@@ -16,7 +16,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.audio_mocked]
 
 class FakeLLM:
     async def generate(self, system: str, user: str) -> str:
-        return "Estoy contigo. Voy a avisar a tu cuidador."
+        return "Estoy contigo. Tu responsable queda avisado."
 
 
 def _enroll_test_voice_sample(db_session, username: str) -> None:
@@ -105,7 +105,7 @@ def test_audio_chunk_creates_alert_with_mocked_models(
     assert body["mode"] == "episode"
     assert body["alert_id"] is not None
     assert body["transcript"] == "[PACIENTE] ayuda no se donde estoy"
-    assert body["reply_text"] == "Estoy contigo. Voy a avisar a tu cuidador."
+    assert body["reply_text"] == "Estoy contigo. Tu responsable queda avisado."
     assert body["segments"][0]["speaker"] == "PACIENTE"
 
     assert db_session.query(Transcript).count() == 2

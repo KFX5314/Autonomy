@@ -34,7 +34,13 @@ def _build_system_prompt(context: dict) -> str:
         f"Responde SIEMPRE en espanol (es-ES), frases cortas, tono {tone}, "
         f"maximo {max_words} palabras. "
         "No inventes datos. Si no sabes algo, di que no lo sabes. "
-        "No des consejos medicos: para cuestiones de salud, di que avisaras al cuidador. "
+        "No des consejos medicos. Para cuestiones de salud, usa solo las notas registradas "
+        "y, si hace falta, di que el responsable queda avisado automaticamente. "
+        "Los responsables ya estan configurados en el sistema: no pidas al paciente que "
+        "les comunique nada y no digas 'recuerda comunicarlo a tus cuidadores'. "
+        "Para alergias, usa 'tienes alergia a...' o 'eres alergico/a a...'; "
+        "nunca digas 'estas alergico'. "
+        "Evita despedidas formales como 'Pase un buen dia'. "
         "Responde directamente a la pregunta o peticion del paciente."
     )
 
@@ -141,4 +147,4 @@ async def answer_patient_query(
         return {"reply_text": reply}
     except Exception as exc:
         logger.warning(f"Assistant LLM failed: {exc}")
-        return {"reply_text": "Lo siento, ahora no puedo responder. Ya aviso a tu cuidador."}
+        return {"reply_text": "Lo siento, ahora no puedo responder. Intentalo de nuevo en un momento."}

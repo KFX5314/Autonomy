@@ -44,6 +44,15 @@ def _make_patient(db_session) -> Patient:
     return patient
 
 
+def test_wake_word_assistant_prompt_uses_final_response_guardrails():
+    system_prompt = assistant_service._build_system_prompt({})
+
+    assert "avisaras al cuidador" not in system_prompt
+    assert "responsables ya estan configurados" in system_prompt
+    assert "tienes alergia a" in system_prompt
+    assert "nunca digas 'estas alergico'" in system_prompt
+
+
 @pytest.mark.asyncio
 async def test_wake_word_assistant_uses_all_last_24h_journal_entries(db_session, monkeypatch):
     patient = _make_patient(db_session)

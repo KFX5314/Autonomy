@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass
 
 from ..config import config
@@ -38,6 +39,54 @@ _POSSIBLE_PATIENT_LINE = re.compile(
     rf"\[(PACIENTE\?|PACIENTE)\]\s*(.+?)(?=\s*\[{_ANY_TAG}\]|\s*$)",
     re.DOTALL,
 )
+_CONTEXTUAL_REPLY_RULE = re.compile(
+    r"\bsi\s+(?:el\s+paciente\s+)?"
+    r"(?:dice|comenta|menciona|pregunta|habla|indica)\s+"
+    r"(?:que\s+)?[\"'“”]?(?P<trigger>.+?)[\"'“”]?\s*"
+    r"(?:,|;|->|=>|\s+entonces\s+)\s*"
+    r"(?:dile|respondele|responde|contestale|contesta)\s*"
+    r"(?:que\s+)?[\"'“”]?(?P<reply>.+?)[\"'“”]?"
+    r"(?=$|\n|\.\s+)",
+    re.IGNORECASE | re.DOTALL,
+)
+_MATCH_STOPWORDS = {
+    "a",
+    "al",
+    "algo",
+    "de",
+    "del",
+    "dice",
+    "diga",
+    "el",
+    "ella",
+    "en",
+    "es",
+    "esta",
+    "este",
+    "esto",
+    "ir",
+    "la",
+    "lo",
+    "los",
+    "me",
+    "mi",
+    "mis",
+    "que",
+    "quiere",
+    "quiero",
+    "se",
+    "si",
+    "su",
+    "sus",
+    "te",
+    "tu",
+    "tus",
+    "un",
+    "una",
+    "va",
+    "vas",
+    "voy",
+}
 
 
 def _has_speaker_tags(transcript: str) -> bool:
@@ -78,6 +127,68 @@ def _extract_rule_patient_text(transcript: str) -> str:
     ).strip()
 
 
+def _normalize_for_match(text: str) -> str:
+    text = unicodedata.normalize("NFD", (text or "").lower())
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    return " ".join(text.split())
+
+
+def _meaningful_tokens(text: str) -> list[str]:
+    return [
+        token
+        for token in _normalize_for_match(text).split()
+        if len(token) > 1 and token not in _MATCH_STOPWORDS
+    ]
+
+
+def _clean_instruction_fragment(text: str) -> str:
+    return (text or "").strip().strip("\"'“”").strip()
+
+
+def _format_contextual_reply(reply: str) -> str:
+    text = _clean_instruction_fragment(reply).rstrip(" .;")
+    if not text:
+        return ""
+    text = text[0].upper() + text[1:]
+    if text[-1] not in ".!?":
+        text += "."
+    return text
+
+
+def _parse_contextual_reply_rules(context: dict) -> list[tuple[str, str]]:
+    instructions = _get_episode_watch_instructions(context)
+    if not instructions:
+        return []
+
+    rules: list[tuple[str, str]] = []
+    for match in _CONTEXTUAL_REPLY_RULE.finditer(instructions):
+        trigger = _clean_instruction_fragment(match.group("trigger"))
+        reply = _clean_instruction_fragment(match.group("reply"))
+        if trigger and reply:
+            rules.append((trigger, reply))
+    return rules
+
+
+def _contextual_trigger_matches(trigger: str, patient_text: str) -> bool:
+    normalized_trigger = _normalize_for_match(trigger)
+    normalized_patient = _normalize_for_match(patient_text)
+    if not normalized_trigger or not normalized_patient:
+        return False
+
+    if normalized_trigger in normalized_patient:
+        return True
+
+    trigger_tokens = _meaningful_tokens(trigger)
+    patient_tokens = set(_meaningful_tokens(patient_text))
+    if not trigger_tokens or not patient_tokens:
+        return False
+
+    if len(trigger_tokens) == 1:
+        return trigger_tokens[0] in patient_tokens
+    return all(token in patient_tokens for token in trigger_tokens)
+
+
 def _build_reply_system_prompt(context: dict, severity: int = 3) -> str:
     profile = context.get("static_profile", {})
     name = profile.get("preferred_name", "el paciente")
@@ -99,13 +210,19 @@ def _build_reply_system_prompt(context: dict, severity: int = 3) -> str:
         notes_str = "; ".join(medical_notes)
         prompt += f"Notas médicas importantes: {notes_str}.\n"
     if severity >= 4:
-        action = "Dile con calma que estas con ella, que busque un lugar seguro y que avisaras a su cuidador."
+        action = (
+            "Dile con calma que estas con ella, que busque un lugar seguro "
+            "y que su responsable queda avisado automaticamente."
+        )
     elif severity >= 3:
         action = "Pregunta si esta bien y si necesita ayuda; si parece confundida, orientala con calma."
     else:
         action = "Pregunta de forma suave si esta bien y si necesita ayuda."
     prompt += (
         f"{action} No uses frases que culpen o presionen como 'no me preocupes'. "
+        "No pidas al paciente que avise o comunique nada a sus cuidadores; ya estan al tanto por el sistema. "
+        "Para alergias, usa 'tienes alergia a...' o 'eres alergico/a a...'; nunca digas 'estas alergico'. "
+        "Evita despedidas formales como 'Pase un buen dia'. "
         "Responde solo con el mensaje hablado para el paciente, sin JSON, sin analisis y sin prefijos."
     )
     return prompt
@@ -203,6 +320,11 @@ def _build_analysis_prompt(context: dict, transcript: str, short_term_memory: st
         f"- Las frases/regex deterministas ya se comprobaron con [PACIENTE] y [PACIENTE?], nunca con [OTRO] ni [ASISTENTE].\n"
         f"- La memoria reciente sólo aclara referencias; no es el audio actual.\n"
         f"- No inventes datos que no estén en el perfil, la memoria o la transcripción.\n\n"
+        f"Cuando generes una respuesta hablada, no pidas al paciente que avise o comunique nada "
+        f"a sus cuidadores; los responsables ya estan configurados y quedan avisados por el sistema. "
+        f"No digas 'recuerda comunicarlo a tus cuidadores'. Para alergias, usa "
+        f"'tienes alergia a...' o 'eres alergico/a a...'; nunca digas 'estas alergico'. "
+        f"Evita despedidas formales como 'Pase un buen dia'.\n\n"
         f"Usa primero los criterios personalizados de vigilancia del responsable si existen. "
         f"Estos criterios describen en lenguaje natural qué situaciones, comportamientos, frases "
         f"o patrones semánticos son preocupantes para este paciente concreto. No exijas coincidencia literal: "
@@ -246,7 +368,8 @@ def _build_analysis_prompt(context: dict, transcript: str, short_term_memory: st
         f"Si la situacion no llega a severidad {config.LLM_ALERT_MIN_SEVERITY}, marca episode=false. "
         f"Si episode=true, severity debe estar entre {config.LLM_ALERT_MIN_SEVERITY} y 5 y reply debe ser una frase corta. "
         f"Para severidad 3, pregunta si esta bien y si necesita ayuda. Para severidad 4-5, "
-        f"orienta con calma y di que avisaras al cuidador. Nunca digas 'no me preocupes'."
+        f"orienta con calma y di que el responsable queda avisado automaticamente. "
+        f"Nunca digas 'no me preocupes'."
     )
 
 
@@ -350,6 +473,19 @@ class EpisodeDetector:
 
         return None
 
+    def _contextual_reply_rule_check(self, patient_text: str) -> EpisodeResult | None:
+        for trigger, reply in _parse_contextual_reply_rules(self.context):
+            if not _contextual_trigger_matches(trigger, patient_text):
+                continue
+            formatted_reply = _format_contextual_reply(reply)
+            return EpisodeResult(
+                is_episode=True,
+                severity=3,
+                reason=f'Instrucción contextual del responsable: "{trigger}"',
+                llm_response=formatted_reply or None,
+            )
+        return None
+
     async def analyze(
         self,
         transcript: str,
@@ -358,9 +494,11 @@ class EpisodeDetector:
     ) -> EpisodeResult:
         rule_text = _extract_rule_patient_text(transcript)
         rule_result = self._rule_based_check(rule_text)
+        if rule_result is None:
+            rule_result = self._contextual_reply_rule_check(rule_text)
 
         if rule_result is not None:
-            if use_llm:
+            if use_llm and rule_result.llm_response is None:
                 try:
                     llm = get_llm_provider()
                     system = _build_reply_system_prompt(self.context, rule_result.severity)

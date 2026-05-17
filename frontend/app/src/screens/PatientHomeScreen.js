@@ -29,8 +29,36 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
   const thresholdRef  = useRef(patientVad.defaultThresholdDb);
   const meteringRef   = useRef([]);
   const recentTtsRef  = useRef(null);
+  const caregiverTtsEnabledRef = useRef(true);
+  const localTtsEnabledRef = useRef(true);
+  const ttsPlaybackEnabledRef = useRef(true);
   const userId = user?.user_id || user?.id;
-  const ttsPlaybackEnabled = caregiverTtsEnabled && localTtsEnabled;
+
+  const applyTtsState = useCallback((localEnabled, caregiverEnabled) => {
+    const effectiveEnabled = caregiverEnabled && localEnabled;
+    localTtsEnabledRef.current = localEnabled;
+    caregiverTtsEnabledRef.current = caregiverEnabled;
+    ttsPlaybackEnabledRef.current = effectiveEnabled;
+    setLocalTtsEnabled(localEnabled);
+    setCaregiverTtsEnabled(caregiverEnabled);
+    return effectiveEnabled;
+  }, []);
+
+  const refreshTtsPlaybackEnabled = useCallback(async () => {
+    let localEnabled = localTtsEnabledRef.current;
+    let caregiverEnabled = caregiverTtsEnabledRef.current;
+
+    localEnabled = await loadPatientTtsEnabled(userId);
+    try {
+      const settings = await getMyPatientSettings();
+      caregiverEnabled = settings.tts_enabled !== false;
+    } catch (e) {
+      if (e?.status === 401) return false;
+      console.warn("Could not load patient TTS settings:", e?.message || e);
+    }
+
+    return applyTtsState(localEnabled, caregiverEnabled);
+  }, [applyTtsState, userId]);
 
   const checkSessionStillValid = useCallback(async () => {
     try {
@@ -48,20 +76,14 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
       checkSessionStillValid();
       const sessionTimer = setInterval(checkSessionStillValid, PATIENT_SESSION_CHECK_MS);
       (async () => {
-        const localEnabled = await loadPatientTtsEnabled(userId);
-        if (active) setLocalTtsEnabled(localEnabled);
-        try {
-          const settings = await getMyPatientSettings();
-          if (active) setCaregiverTtsEnabled(settings.tts_enabled !== false);
-        } catch (e) {
-          console.warn("Could not load patient TTS settings:", e?.message || e);
-        }
+        const enabled = await refreshTtsPlaybackEnabled();
+        if (active) ttsPlaybackEnabledRef.current = enabled;
       })();
       return () => {
         active = false;
         clearInterval(sessionTimer);
       };
-    }, [checkSessionStillValid, userId])
+    }, [checkSessionStillValid, refreshTtsPlaybackEnabled])
   );
 
   const startRecording = async () => {
@@ -106,10 +128,14 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
     return { recentTtsText: recent.text, recentTtsAgeMs: ageMs };
   }, []);
 
-  const speakReply = useCallback((text, rate) => {
+  const speakReply = useCallback(async (text, rate) => {
     if (!text) return;
     setLastReply(text);
-    if (!ttsPlaybackEnabled) return;
+    const enabled = await refreshTtsPlaybackEnabled();
+    if (!enabled || !ttsPlaybackEnabledRef.current) {
+      Speech.stop();
+      return false;
+    }
     markRecentTts(text);
     Speech.speak(text, {
       language: tts.language,
@@ -119,7 +145,8 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
       onStopped: () => markRecentTts(text),
       onError: () => markRecentTts(text),
     });
-  }, [markRecentTts, ttsPlaybackEnabled]);
+    return true;
+  }, [markRecentTts, refreshTtsPlaybackEnabled]);
 
   const stopAndSend = async () => {
     const recording = recordingRef.current;
@@ -137,10 +164,10 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
           setStatus(`Escuchado: "${result.transcript.substring(0, 60)}..."`);
         }
         if (result.mode === "assistant" && result.reply_text) {
-          speakReply(result.reply_text, tts.assistantRate);
-          setStatus(`🗣 ${result.reply_text.substring(0, 80)}`);
+          const spoken = await speakReply(result.reply_text, tts.assistantRate);
+          setStatus(spoken ? `🗣 ${result.reply_text.substring(0, 80)}` : `Respuesta: ${result.reply_text.substring(0, 80)}`);
         } else if (result.episode && result.reply_text) {
-          speakReply(result.reply_text, tts.episodeRate);
+          await speakReply(result.reply_text, tts.episodeRate);
           setStatus("⚠️ Episodio detectado - Tu responsable ha sido avisado");
         }
       }
@@ -321,10 +348,10 @@ export default function PatientHomeScreen({ user, onLogout, onOpenSettings }) {
           setStatus(`Escuchado: "${result.transcript.substring(0, 60)}..."`);
         }
         if (result.mode === "assistant" && result.reply_text) {
-          speakReply(result.reply_text, tts.assistantRate);
-          setStatus(`🗣 ${result.reply_text.substring(0, 80)}`);
+          const spoken = await speakReply(result.reply_text, tts.assistantRate);
+          setStatus(spoken ? `🗣 ${result.reply_text.substring(0, 80)}` : `Respuesta: ${result.reply_text.substring(0, 80)}`);
         } else if (result.episode && result.reply_text) {
-          speakReply(result.reply_text, tts.episodeRate);
+          await speakReply(result.reply_text, tts.episodeRate);
           setStatus("⚠️ Episodio detectado - Tu responsable ha sido avisado");
         } else if (listening) {
           setStatus("Escuchando...");

@@ -16,6 +16,7 @@ import {
   Switch,
 } from "react-native";
 import Constants from "expo-constants";
+import * as Speech from "expo-speech";
 import { getMyPatientSettings, sendPatientLogoutWarning } from "../services/api";
 import { loadPatientTtsEnabled, savePatientTtsEnabled } from "../services/session";
 
@@ -62,6 +63,9 @@ export default function SettingsScreen({ navigation, route, user: propUser, onLo
 
   const handleTtsToggle = async (value) => {
     setLocalTtsEnabled(value);
+    if (!value) {
+      Speech.stop();
+    }
     await savePatientTtsEnabled(userId, value);
   };
 
