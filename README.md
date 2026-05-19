@@ -146,6 +146,14 @@ Ollama se expone por defecto en `http://127.0.0.1:11434`. El script del backend 
 
 ### 3. Backend
 
+Crea el entorno virtual de Python e instala las dependencias del backend desde la raiz del proyecto:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python -m pip install --upgrade pip
+.\.venv\Scripts\python -m pip install -r backend\requirements.txt
+```
+
 Opcionalmente, copia `backend/.env.example` a `backend/.env` y ajusta los valores locales antes de arrancar:
 
 ```powershell
